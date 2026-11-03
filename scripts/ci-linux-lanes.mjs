@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The Linux jobs' work as lanes of one machine: when the static job runs on a Boat VM (ci.yml, BOAT_CI), the vitest
@@ -13,7 +13,7 @@ export function vitestLane(entry, retryLog) {
     name: `vitest (ubuntu-latest, ${entry.part})`,
     env: { OMB_VITEST_RETRY_LOG: retryLog, OMB_VITEST_E2E: entry.e2e, OMB_VITEST_SUBSET: entry.files },
     commands: [
-      `pnpm exec vitest run ${entry.files} --shard=${entry.shard}/${entry.shards} --reporter=default --reporter=github-actions`,
+      `pnpm exec vitest run --project=unit --project=integration ${entry.files} --shard=${entry.shard}/${entry.shards} --reporter=default --reporter=github-actions --reporter=json --outputFile.json="${join(dirname(retryLog), `vitest-${entry.shard}.json`)}"`,
       ...(entry.node_tests ? ["pnpm broker:test && pnpm test:electron"] : []),
     ],
   };
@@ -57,7 +57,7 @@ export async function runLanes(lanes, { dir, timeoutMs, heartbeatMs = 60_000, lo
     const file = join(dir, `${index + 1}.log`);
     const out = openSync(file, "w");
     const child = spawn("bash", ["-eo", "pipefail", "-c", lane.commands.join("\n")], {
-      env: { ...process.env, ...lane.env }, stdio: ["ignore", out, out], detached: true,
+      env: { ...process.env, ...lane.env, OMB_VITEST_LANE_COUNT: String(lanes.length) }, stdio: ["ignore", out, out], detached: true,
     });
     running.set(lane.name, child);
     // Each lane has its own process group, so a timeout or a cancelled job ends its servers and fake CLIs too.

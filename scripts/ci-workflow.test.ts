@@ -88,7 +88,7 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.vitest.name).toBe("vitest (${{ matrix.os }}, ${{ matrix.part }})");
     const run = (workflow.jobs.vitest.steps as { name?: string; run?: string; env?: Record<string, string> }[])
       .find((step) => step.name === "Run tests")!;
-    expect(run.run).toContain("pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} ");
+    expect(run.run).toContain("pnpm exec vitest run --project=unit --project=integration ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} ");
     expect(run.env?.OMB_VITEST_E2E).toBe("${{ matrix.e2e }}");
     expect(run.env?.OMB_VITEST_SUBSET).toBe("${{ matrix.files }}");
     const { include } = vitestMatrix(["macos-latest", "ubuntu-latest", "windows-latest"]);
@@ -237,16 +237,20 @@ describe("CI concurrency", () => {
       vitest_matrix: "${{ steps.scope.outputs.vitest_matrix }}",
       packaged_server_os: "${{ steps.scope.outputs.packaged_server_os }}",
     });
-    // Only these three static steps depend on the scope's build flag; the rest always run, or run only on Boat.
-    const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.if?.includes("outputs.build"));
+    const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.run && step.if?.includes("outputs.build"));
     expect(built.map((step) => [step.if, step.run])).toEqual([
       ["steps.scope.outputs.build == 'true'", "pnpm typecheck"],
       ["steps.scope.outputs.build == 'true'", "pnpm check:electron"],
       ["steps.scope.outputs.build == 'true'", "pnpm exec vite build"],
     ]);
-    expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts",
-    )).toBe(true);
+    const preflight = workflow.jobs.static.steps.find((step: { name?: string }) => step.name === "Verify CI selection and documentation references");
+    expect(preflight.if).toBeUndefined();
+    expect(preflight["continue-on-error"]).toBeUndefined();
+    expect(preflight.run.split(/\s+/)).toEqual(expect.arrayContaining([
+      "--project=unit", "--project=integration", "scripts/ci-scope.test.ts", "scripts/ci-linux-lanes.test.ts", "scripts/ci-workflow.test.ts",
+      "scripts/testing/test-suites.test.ts", "scripts/testing/verification-docs.test.ts", "scripts/testing/file-size-ratchet.test.ts",
+      "scripts/testing/comment-history.test.ts", "server/drivers/tool-scope-coverage.test.ts", "src/lib/analytics-allowlist.test.ts",
+    ]));
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
       if (["static", "gate"].includes(name)) continue;
       // The one deploy job: after the control-plane checks, on main pushes only. It is
@@ -347,8 +351,8 @@ describe("CI on Boat", () => {
     const steps = workflow.jobs.static.steps as Step[];
     const boatOnly = steps.slice(steps.findIndex((step) => step.name === "production UI build") + 1);
     expect(boatOnly.map((step) => step.if)).toEqual([
-      "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes",
-      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes",
+      "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes",
+      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes",
     ]);
     const lanes = boatOnly.find((step) => step.run === "node scripts/ci-linux-lanes.mjs")!;
     expect(lanes.env).toMatchObject({ OMB_CI_LINUX_LANES: "${{ steps.scope.outputs.linux_lanes }}", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" });

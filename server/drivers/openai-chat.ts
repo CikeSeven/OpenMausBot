@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
+import type { Completion, CompletionJson, OpenAIChatMessage, RuntimeOptions, Usage } from "./openai-chat-types.ts";
+export type { Completion, LocalToolContext, OpenAIChatMessage } from "./openai-chat-types.ts";
 import type {
-  DriverCreateInput,
   EffortLevel,
-  ModelCatalog,
   ProviderInstance,
   RuntimeEvent,
   RuntimeEventListener,
@@ -11,18 +11,17 @@ import type {
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { ASK_USER_TOOL, ASK_USER_TOOL_DEFINITION, askQuestionSummary, parseAskQuestions, questionChoices } from "../../shared/ask-question.ts";
-import { allowsTool, parseToolScope, type ToolScope } from "../../shared/tool-scope.ts";
+import { allowsTool, parseToolScope } from "../../shared/tool-scope.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { toolDetailPreview } from "../tool-summary.ts";
 import { ChatToolSessionError, chatToolNotices, composeToolSessions, mountChatTools, type ChatToolDefinition, type ChatToolSession, type ChatToolResult } from "./chat-mcp-tools.ts";
-import type { ModelWire } from "./wires/model-wire.ts";
-import { DELEGATE_TOOL, DELEGATE_TOOL_DEFINITION, runSubagents, serialized, subagentTasks, type SubagentContext, type SubagentLimits } from "./chat-subagents.ts";
+import { DELEGATE_TOOL, DELEGATE_TOOL_DEFINITION, runSubagents, serialized, subagentTasks, type SubagentContext } from "./chat-subagents.ts";
 import { noteToolBudget } from "../tool-budgets.ts";
 import { assertImageTransport, chatImageBudget, chatToolImages, chatUserContent, type ChatContentPart } from "./chat-images.ts";
 import { promptHalves, volatileContextNote, withContextNote } from "./prompt-split.ts";
 import { createChatToolApproval, refusal } from "./chat-tool-approval.ts";
 import { ChatProtocolError, ChatReasoningDetails, ChatToolCalls, object, type ChatToolCall } from "./openai-chat-protocol.ts";
-import { completionError, httpErrorDetail, refusedToolCall, refusedToolCallFailure, rejectsReasoningReplay, rejectsToolsParameter, RejectedToolCallError, UnsupportedChatToolsError, UnsupportedReasoningReplayError, type ProviderBody } from "./openai-chat-refusals.ts";
+import { completionError, httpErrorDetail, refusedToolCall, refusedToolCallFailure, rejectsReasoningReplay, rejectsToolsParameter, RejectedToolCallError, UnsupportedChatToolsError, UnsupportedReasoningReplayError } from "./openai-chat-refusals.ts";
 import { ChatRepeatGuard } from "./chat-repeat-guard.ts";
 import { TextCallHoldback, textToolCalls } from "./chat-text-tool-calls.ts";
 import { createModelRoutes, ModelRouteRefused, noRouteLeft, readResponsesStream, responsesRequest, routeRefusal, type ModelRoute, type ResponseItem } from "./openai-responses.ts";
@@ -36,52 +35,6 @@ import { classifyContinuable, writeTurnHandoff } from "../turn-continuation.ts";
 import { KEY_REJECTED_REASON, keyRejected, noteKeyAccepted, noteKeyRejected, rejectsKey } from "../key-rejections.ts";
 import type { Agent } from "undici";
 
-export interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | ChatContentPart[] | null;
-  tool_calls?: ChatToolCall[];
-  tool_call_id?: string;
-  reasoning_content?: string;
-  reasoning?: string;
-  reasoning_details?: Record<string, unknown>[];
-}
-
-interface Usage {
-  input: number;
-  output: number;
-}
-
-export interface Completion {
-  text: string;
-  reasoning: string;
-  usage: Usage | null;
-  toolCalls: ChatToolCall[];
-  finishReason: string | null;
-  protocolReasoning: string;
-  protocolReasoningDetails: Record<string, unknown>[];
-  /** Every output item of a Responses API reply, encrypted reasoning included, for the next round of this turn only. */
-  responseOutput?: ResponseItem[];
-}
-
-interface CompletionJson extends ProviderBody {
-  model?: string;
-  choices?: Array<{
-    index?: number;
-    message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; reasoning_details?: unknown; tool_calls?: unknown; function_call?: unknown };
-    delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; reasoning_details?: unknown; tool_calls?: unknown; function_call?: unknown };
-    finish_reason?: string | null;
-  }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; cost?: number };
-  /** Groq reports streaming usage in its final x_groq envelope. */
-  x_groq?: { usage?: CompletionJson["usage"] };
-}
-
-interface NativeLog {
-  source: string;
-  outgoing(turn: SendTurnInput, messages: OpenAIChatMessage[], model: string, tools: ChatToolDefinition[]): unknown;
-  incoming(completion: Completion): unknown;
-}
-
 // Node's fetch (undici 7.29 in Electron 43, 8.9 in Node 26) fails a request after 300 s without response headers
 // or body bytes, whatever its signal allows. A local model sends nothing until its first token.
 const FETCH_LIMIT_MS = 300_000;
@@ -91,62 +44,6 @@ async function fetchPastLimit(url: string, init: RequestInit): Promise<Response>
   const { Agent: UndiciAgent, fetch: fetchWithoutLimits } = await import("undici");
   unlimitedAgent ??= new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 });
   return fetchWithoutLimits(url, { ...init, dispatcher: unlimitedAgent } as Parameters<typeof fetchWithoutLimits>[1]) as unknown as Promise<Response>;
-}
-
-export interface LocalToolContext {
-  signal: AbortSignal;
-  scope: ToolScope | undefined;
-}
-
-interface RuntimeOptions<Config> {
-  input: DriverCreateInput<Config>;
-  /** Speaks this model API instead of Chat Completions: it builds every request and reads every reply. */
-  wire?: ModelWire;
-  /** In-process tools listed before the turn's MCP tools. */
-  localTools?: (turn: SendTurnInput, context: LocalToolContext) => ChatToolSession | undefined;
-  /** Placed before the bot's own system prompt; it must not change between turns, or the cached prefix would. */
-  basePrompt?: (turn: SendTurnInput) => string;
-  effortLevels?: readonly EffortLevel[];
-  /** A failed call is information the model reads and acts on, never a reason to end the turn; a refusal still is. */
-  readsToolFailures?: boolean;
-  /** Offers the delegate tool. Tools named in `concurrentTools` may run in several subagents at once; every other call
-   * waits for the one before it, since a desktop or a browser tab serves one hand at a time. */
-  subagents?: SubagentLimits & { concurrentTools: ReadonlySet<string> };
-  driverKind: string;
-  apiKey: string;
-  apiUrl: string;
-  models: () => ModelCatalog;
-  requestBody(model: string, messages: OpenAIChatMessage[], stream: boolean): Record<string, unknown>;
-  httpErrorLabel: string;
-  missingKeyError: string;
-  unavailableReason: string;
-  timeoutMs: number;
-  /** Ask a server on this machine or network for its models this often while a reply is pending, and stop the reply
-   * when it misses LIVENESS_MISSES checks in a row: it crashed, froze or left the network. */
-  livenessEveryMs?: number;
-  nativeLog: NativeLog;
-  refreshModels?: () => Promise<void>;
-  generateModel?: () => string;
-  reasoning?: boolean;
-  /** Cerebras rejects `reasoning_content` and takes `reasoning`. */
-  reasoningReplayField?: "reasoning_content" | "reasoning";
-  contentText?: (content: unknown) => string;
-  billing?: "metered";
-  includeUsageInCompleted?: boolean;
-  noBodyError?: string;
-  retryScale?: number;
-  tools?: boolean;
-  computerUse?: boolean;
-  /** A text-only model keeps the computer and browser tools but never receives a screenshot or attachment. */
-  imageInput?: (model: string) => boolean;
-  /** The name to send for a model, when its server knows it by another. */
-  servedModel?: (model: string) => Promise<string>;
-  /** Smaller models announce a step and end the turn without calling a tool; such a reply gets a nudge, at most three
-   * per turn and each only after tool progress since the last. */
-  nudgeAnnouncedAction?: boolean;
-  /** A model on this machine or network: read a tool call it wrote as text, stop it repeating itself, and send it back
-   * to fix a failed call instead of ending the turn on it. */
-  localModel?: boolean;
 }
 
 const usageFrom = (usage: CompletionJson["usage"]): Usage | null =>

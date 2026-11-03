@@ -31,8 +31,11 @@ pnpm dev           # app → http://127.0.0.1:5199
 pnpm dev:desktop   # Electron shell (macOS/Ubuntu; keep server + Vite running)
 
 pnpm typecheck     # app + server
-pnpm test          # vitest suite (server unit + driver contract + API smoke)
-pnpm test:watch    # same, in watch mode
+pnpm test          # parallel unit tests
+pnpm test:watch    # unit tests in watch mode
+pnpm test:file server/store.test.ts # one file from either test project
+pnpm test:integration # isolated drivers, APIs, and end-to-end tests
+pnpm test:all      # complete local regression
 pnpm check:electron # syntax-check the plain JS Electron entrypoints
 
 pnpm package:mac   # DMG + ZIP; requires Swift/Xcode tools
@@ -86,7 +89,21 @@ Data lives in `~/.openmausbot/` (bots, transcripts, per-thread NDJSON event logs
 
 ## Tests
 
-The suite is colocated (`server/**/*.test.ts`) and runs with `pnpm test`. Three layers:
+Tests are colocated with their modules. `pnpm test` runs the `unit` project in
+isolated fork processes, up to four at once. It covers the renderer, shared
+modules and the server's admitted pure-logic tests. `pnpm test:watch` selects
+the same project. Give `pnpm test:file` a complete test path to run a test
+from either project without also selecting similarly named files.
+
+`pnpm test:integration` runs the remaining root tests one file at a time.
+New backend, script and host tests join that project unless explicitly
+admitted in `scripts/testing/unit-tests.json`. Tests that start a server,
+driver process or browser, or use the message database, belong in integration.
+`pnpm test:all` runs both projects, the independent eval suite, Broker and
+Electron unit tests, and the packaged server smoke. The control plane keeps
+its own `pnpm control-plane:test` command.
+
+The server tests exercise three levels:
 
 - **Unit** — registry, bus, store. Pure in-process, use the fake driver in
   [`server/testing/fake-driver.ts`](server/testing/fake-driver.ts).
@@ -269,7 +286,7 @@ PRs run the docs tests, while translation-only PRs run the locale subset. Runtim
 changes select broader tests and smokes.
 
 - **typecheck + lint** — the static job always runs the checks above, and adds typecheck, Electron syntax checks, and a production UI build when selected. It runs before the dependent jobs.
-- **vitest (os, part)** — full platform suites use eight Linux or Windows shards and four macOS shards; subset jobs have their own file lists and shard counts. Windows jobs run on PRs whose changes can affect Windows or carry the `windows` label. macOS Vitest shards run in the nightly/manual full lane. Files run serially within each shard, balanced by recorded platform time. Use the [reproduction steps](docs/ci.md#vitest-shards) for the failing job.
+- **vitest (os, part)** — full platform suites use eight Linux or Windows shards and four macOS shards; subset jobs have their own file lists and shard counts. Windows jobs run on PRs whose changes can affect Windows or carry the `windows` label. macOS Vitest shards run in the nightly/manual full lane. Each shard runs parallel unit tests followed by serial integration files, balanced by recorded platform time. Use the [reproduction steps](docs/ci.md#vitest-shards) for the failing job.
 - **packaged server smoke (os)** — when selected, the server bundle is copied out of the repo and started with no `node_modules` in reach.
 - **Windows CUA host smoke**, **macOS smokes (packaged server + Electron)** — when selected, real Electron utility processes run against disposable homes; never the live app.
 - **CI** — the required aggregate gate checks that selected jobs passed and unselected jobs were skipped. Its log names any failing dependency.
@@ -284,7 +301,8 @@ Provider fakes under `server/testing/fake-*.ts` must stay dependency-free: they 
 
 ## Before you open the PR
 
-- [ ] `pnpm typecheck` and `pnpm test` pass
+- [ ] `pnpm typecheck` and `pnpm test` pass; server or driver changes also pass their integration tests
+- [ ] `pnpm test:all` passes before a complete local qualification
 - [ ] `pnpm lint` passes
 - [ ] Locale changes pass `pnpm i18n:check` and have been reviewed by a speaker
 - [ ] `pnpm check:electron` passes for desktop-shell changes

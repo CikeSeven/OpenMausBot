@@ -1,8 +1,9 @@
 # CI job selection
 
 Every PR still runs the workflow, its `static` job and the `CI` gate: locale
-validation, lint, the CI-selection tests and the verification-documentation
-checks always run. Selection never skips the entire workflow.
+validation, lint, CI selection, test inventory, driver capability coverage,
+source-size and comment rules, and verification-documentation checks always
+run. Selection never skips the entire workflow.
 
 `scripts/ci-scope.mjs` sorts a pull request's changed files (a local
 merge-base diff, rename detection off, so a moved file selects its old path
@@ -14,9 +15,11 @@ too) into areas, and runs only the jobs some area can affect:
 | locales | `src/locales/*.json` except `en.json`, `src/locales/*.test.ts` | the build, the locale tests: every `src/` test and `scripts/generate-locale.test.mjs` in two Linux shards, with the Electron node tests |
 | web | the rest of `src/`, `public/`, the root `*-preview.html` pages | the build, the eight Linux shards, the renderer smoke |
 | script tests | `scripts/**/*.test.*` | the Linux shards (and Windows', see Windows), the renderer smoke, browser identity |
-| server | `server/`, `shared/`, `enterprise/`, `companion/`, `evals/`, `skills/`, `deploy/`, the composio broker, the Dockerfile, and the renderer files the server or a smoke loads | the build, Linux shards (and Windows', see Windows), behavior evals, packaged server, open-source edition, the macOS smokes, renderer smoke, browser identity, browser driver, Linux package |
-| Windows computer control | the `electron/` modules that start computer control and lend a PC's screen: `cua`, `cua-failure`, `cua-connection`, `capabilities`, `screen-status`, `shared-cua-connection`, `shared-computer-access`, `lent-screen-tools`, `lent-screen-failures`, `paced-typing` | the same as server, and Windows CUA |
-| desktop | the rest of `electron/`, `build/`, `electron-builder.yml`, `index.html` | the same as server |
+| server | `server/` except browser modules, `shared/`, `enterprise/`, `companion/`, `evals/`, `skills/`, the composio broker, and the renderer files the server or a smoke loads | the build, Linux shards (and Windows', see Windows), behavior evals, packaged server, open-source edition, renderer smoke, browser identity |
+| browser | `server/browser/`, `server/browser-*` | the same as server, plus browser-driver checks |
+| runtime | `deploy/`, the Dockerfile, `.dockerignore`, `compose.yaml` | the same as server, plus browser-driver checks inside the container runtime |
+| Windows computer control | the `electron/` modules that start computer control and lend a PC's screen: `cua`, `cua-failure`, `cua-connection`, `capabilities`, `screen-status`, `shared-cua-connection`, `shared-computer-access`, `lent-screen-tools`, `lent-screen-failures`, `paced-typing` | the same as desktop, and Windows CUA |
+| desktop | the rest of `electron/`, `build/`, `electron-builder.yml`, `index.html`, `rail.html` | the same as server, plus macOS smokes and Linux package validation |
 | control plane | `cloudflare/control-plane/` | the control-plane job |
 | everything | anything else: `.github/` workflows, `package.json`, the lockfile and workspace, tsconfig, vite and vitest config, `third_party/`, `scripts/` code, unknown paths | every job |
 
@@ -28,7 +31,9 @@ areas run the union of their jobs. Why the mapping is what it is:
   the renderer smoke, and those renderer files count as server.
   `scripts/ci-scope.test.ts` holds the list equal to the import graph.
 - The macOS smokes run the packaged server inside Electron (approval modes,
-  app frames, phone relay, login handoff), so a server change runs them.
+  app frames, phone relay, login handoff). Desktop and dependency changes,
+  the shared renderer files above, macOS paths and diffs naming macOS APIs
+  select them. Other server PRs leave them to main and the full lane.
 - A renderer change runs no Windows or macOS shard: the renderer's tests read
   the platform from the desktop bridge, never the host. The full lane still
   runs both.
@@ -87,10 +92,63 @@ PR's older run (see Main and releases for every other group).
 The separate shared-terminal smoke workflow is manual-only: its tests already
 run in the Windows Vitest/Electron jobs.
 
+## Local tests
+
+| Command | Coverage |
+| --- | --- |
+| `pnpm test`, `pnpm test:unit` | renderer, shared modules and explicitly admitted server/host unit files |
+| `pnpm test:watch` | the same unit project in watch mode |
+| `pnpm test:file server/store.test.ts` | a complete file path from either root project |
+| `pnpm test:integration` | the remaining root tests, including real fixture servers and fake driver processes |
+| `pnpm test:all` | both root projects, the independent eval suite, Broker, Electron node tests and packaged server |
+
+Both root projects use isolated forks and a temporary home per file. Unit
+tests do not initialize the server's message database. Backend, script and
+host files are admitted through `scripts/testing/unit-tests.json`; new files
+in those directories default to integration. The coverage check asks Vitest
+to discover the real projects and requires their union to contain every root
+test exactly once. Evals have their own configuration and run once through
+the behavior-evals job.
+
+Unit workers are capped at four and the available CPU count. On Boat each
+lane shares that CPU budget with all the other lanes. Integration files stay
+serial. `pnpm exec vitest run` still selects both projects; CI names them
+explicitly so changing the default developer command cannot narrow CI.
+
+`pnpm test:file` requires existing complete file paths and rejects a missing
+file or a directory before starting Vitest. Raw Vitest positional filters
+match substrings: a bare `shared` can also select `server/shared-computers` tests.
+
+Local measurements on November 3, 2026 used Linux, Node 26.13.0, pnpm
+10.33.0, 24 available CPUs and the four-worker limit. All three runs passed
+14,118 tests across 1,190 files, with two existing skips and three TODOs:
+
+| Run | Vitest cache | Wall time |
+| --- | --- | --- |
+| 1 | disabled | 83.69 s |
+| 2 | enabled | 84.10 s |
+| 3 | enabled | 156.05 s |
+
+The median is 84.10 s; individual runs vary. These are local measurements,
+not GitHub-hosted runner timings. The same 52 shared-module files took about
+13 s serially and 4 s with four workers during the initial comparison.
+
+After the regression fixes, the complete default command passed again in
+90.91 s with the same 14,118 tests and 1,190 files. Linux qualification used
+Node 24.22.2: eight full shards followed by changed-file rechecks and a
+complete unit run cover all 2,202 discovered root files exactly once in the
+verification inventory: 28,012 passed tests, 252 existing skips and three TODOs.
+The independent checks also passed: 70 eval tests, the six offline scenarios,
+golden replay, the live-tier offline guard, 102 Broker tests, 1,522 Electron
+node tests, 143 control-plane tests, typechecks, lint and packaged-server
+smokes. Public-site browser qualification needs public DNS; this workstation's
+synthetic DNS leaves that optional subcheck unavailable. Windows and macOS
+qualification remains on their own Actions runners.
+
 ## Vitest shards
 
-The suite runs one file at a time, so a shard takes as long as its files added
-up, and the slowest shard sets how long a PR and a release wait. Linux and
+Each shard runs its parallel unit project before its serial integration
+project. The slowest shard sets how long a PR and a release wait. Linux and
 Windows run eight shards each, macOS four (the full lane only);
 `scripts/ci-scope.mjs` builds the matrix.
 
@@ -126,6 +184,13 @@ three platforms) when shards drift apart:
 node scripts/testing/update-shard-weights.mjs --run <run id> --run <run id> --run <run id>
 ```
 
+Every shard also uploads a `vitest-*` JSON results artifact for seven days,
+including failed runs. Boat uploads its lane results together. The updater
+accepts both the project-prefixed job logs and downloaded JSON reports.
+Electron runtime downloads are cached per OS, architecture and lockfile;
+typecheck state is cached separately by OS, architecture, Node major,
+dependencies, compiler configuration and commit.
+
 To reproduce a failing Vitest job locally:
 
 1. Use the checkout revision shown in that job's log and install its locked
@@ -134,7 +199,8 @@ To reproduce a failing Vitest job locally:
 2. Use the same OS. Shard weights are platform-specific, so Windows shard 3
    and Linux shard 3 do not contain the same files.
 3. Copy the expanded command from **Run tests**, including any file filters
-   and the complete `--shard=n/count` fraction. Copy its `OMB_VITEST_E2E`
+   and the complete `--shard=n/count` fraction. Replace a runner-specific
+   JSON report output path with a local path. Copy its `OMB_VITEST_E2E`
    and `OMB_VITEST_SUBSET` environment values too. On Boat, the static job
    contains each shard's output in a `vitest (ubuntu-latest, ...)` lane's
    log group; the lane uses the same matrix values.
@@ -197,6 +263,7 @@ its change can break Windows first
   bundles, prepares, packages, stages or smokes the app, or what decides how
   the Windows shards run (`ci.yml`, `ci-scope.mjs`, the host e2e list, the
   shard weights, the retry list and runner, `server/testing/host-timeout.ts`);
+- it changes CLI lookup, engine installation or process launch in `server/`;
 - it changes one of the e2e files the Windows shards also run
   (`scripts/testing/host-e2e.ts`);
 - an added or removed line of its code (not docs or translations) names

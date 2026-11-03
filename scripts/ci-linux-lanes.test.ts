@@ -26,7 +26,7 @@ describe("Linux lanes", () => {
     expect(lanes[0]).toEqual({
       name: "vitest (ubuntu-latest, shard 1/8)",
       env: { OMB_VITEST_RETRY_LOG: "/t/retries.jsonl", OMB_VITEST_E2E: "all", OMB_VITEST_SUBSET: "" },
-      commands: ["pnpm exec vitest run  --shard=1/8 --reporter=default --reporter=github-actions", "pnpm broker:test && pnpm test:electron"],
+      commands: ['pnpm exec vitest run --project=unit --project=integration  --shard=1/8 --reporter=default --reporter=github-actions --reporter=json --outputFile.json="/t/vitest-1.json"', "pnpm broker:test && pnpm test:electron"],
     });
     expect(lanes.slice(1, 8).every((lane) => lane.commands.length === 1)).toBe(true);
   });
@@ -34,7 +34,7 @@ describe("Linux lanes", () => {
   it("runs a subset's files and leaves out what the plan leaves out", () => {
     const entry = { os: "ubuntu-latest", part: "docs tests", shard: 1, shards: 1, files: "a.test.ts b.test.ts", e2e: "all", node_tests: false };
     expect(lanesFor({ vitest: [entry], evals: false, packaged_server: false }, "/r")).toEqual([vitestLane(entry, "/r")]);
-    expect(vitestLane(entry, "/r").commands).toEqual(["pnpm exec vitest run a.test.ts b.test.ts --shard=1/1 --reporter=default --reporter=github-actions"]);
+    expect(vitestLane(entry, "/r").commands).toEqual(['pnpm exec vitest run --project=unit --project=integration a.test.ts b.test.ts --shard=1/1 --reporter=default --reporter=github-actions --reporter=json --outputFile.json="/vitest-1.json"']);
     expect(lanesFor({ vitest: [], evals: true, packaged_server: false }, "/r")).toEqual([EVALS_LANE]);
   });
 
@@ -43,7 +43,7 @@ describe("Linux lanes", () => {
     const lines: string[] = [];
     let summary = "";
     const failed = await runLanes([
-      { name: "slow pass", env: { WORD: "late" }, commands: ["sleep 0.6", "echo \"$WORD one\"", "echo two"] },
+      { name: "slow pass", env: { WORD: "late" }, commands: ['test "$OMB_VITEST_LANE_COUNT" = 3', "sleep 0.6", "echo \"$WORD one\"", "echo two"] },
       { name: "quick fail", env: {}, commands: ["echo before", "exit 3", "echo never"] },
       { name: "hang", env: {}, commands: ["echo hanging", "sleep 30"] },
     ], { dir: scratch(), timeoutMs: 1_500, heartbeatMs: 250, log: (line) => lines.push(line), summary: (text) => { summary = text; } });

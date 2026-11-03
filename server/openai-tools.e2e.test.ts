@@ -41,13 +41,13 @@ function delivered(request: ChatRequest) {
   const turn = request.messages.findLast((message) => message.role === "user")?.content ?? "";
   return { system, turn, all: `${system}\n${turn}` };
 }
-function expectMemoryInTurn(request: ChatRequest, text: string) {
+function expectMemoryInTurn(request: ChatRequest, text: string, options: { trailingContext?: boolean } = {}) {
   const { system, turn } = delivered(request);
   expect(system).not.toContain("Fixture prefers concise replies.");
   expect(turn.slice(0, CONTEXT_NOTE.length + 2)).toBe(`${CONTEXT_NOTE}\n\n`);
   expect(turn).toContain(MEMORY);
   expect(turn.indexOf(MEMORY)).toBeLessThan(turn.lastIndexOf(text));
-  expect(turn.slice(-text.length)).toBe(text);
+  if (!options.trailingContext) expect(turn.slice(-text.length)).toBe(text);
 }
 
 it.each(["openaiCompat", "groq", "meta"] as const)("%s runs structured MCP calls through real harness approval and continuation, preserving text and cancellation", async instanceId => {
@@ -232,7 +232,8 @@ it.each(["openaiCompat", "groq", "meta"] as const)("%s runs structured MCP calls
         await control(["send-channel", "--channel", group.id, "--text", "Greet this room."]);
         expect((await control(["wait", "--channel", group.id, "--timeout", "20"])).status).toBe("settled");
         const room = delivered(requests.at(-1)!);
-        expectMemoryInTurn(requests.at(-1)!, `Greet this room.\n\n(Reply to the conversation above as API tool ${mode}.)`);
+        expectMemoryInTurn(requests.at(-1)!, "Greet this room.", { trailingContext: true });
+        expect(room.turn).toContain(`(Reply to the conversation above as API tool ${mode}.)`);
         expect(room.all).not.toContain("File locations for this bot");
         expect(room.all).not.toContain("update it with your file tools");
         await control(["messages", "--channel", group.id, "--limit", "10"]);

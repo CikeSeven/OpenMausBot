@@ -149,7 +149,7 @@ async function boot() {
     env: {
       PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: dataDir, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1),
-      OMB_CLOUD_ROLE: "home", OMB_CLOUD_MACHINE_ID: "3f9c2a4e-8b1d-4c6e-9a7f-2d5e8c1b0a93", OMB_CLOUD_ADMIN_URL: "https://cloud.example.test",
+      OMB_BOT_BOX: "off", OMB_CLOUD_ROLE: "home", OMB_CLOUD_MACHINE_ID: "3f9c2a4e-8b1d-4c6e-9a7f-2d5e8c1b0a93", OMB_CLOUD_ADMIN_URL: "https://cloud.example.test",
       OMB_CLOUD_BOOTSTRAP_SECRET: secret, OMB_PUBLIC_URL: `https://${HOST}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -337,6 +337,9 @@ it("the person's Mac, lent by itself through the real connector, is usable by th
   expect((await reads(updatesCall)).isError).toBe(true);
 
   expect(await sees(await run(rewritten))).toBe(0);
+  const previousRewritten = ((await api("GET", "/api/routines", { token: owner })).body.runs as Array<{ id: string; routineId: string }>)
+    .find(run => run.routineId === rewritten.id)!;
+  expect((await api("POST", `/api/routine-runs/${previousRewritten.id}/cancel`, { token: owner })).status).toBe(200);
   const ownRetimed = await routineFor("Owner retimed");
   expect((await api("PATCH", `/api/routines/${ownRetimed.id}`, { token: owner, body: { schedule: { type: "interval", everyMinutes: 30, anchorAt: Date.now() + 60_000 } } })).status).toBe(200);
   expect(await sees(await run(ownRetimed))).toBe(1);

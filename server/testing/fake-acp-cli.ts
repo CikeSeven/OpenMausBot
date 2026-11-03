@@ -383,7 +383,11 @@ const resultAndConfigUpdates = (id: unknown, res: unknown, after: string, sessio
 const rpcMethods: string[] = [];
 const recordMethod = (method: string) => {
   rpcMethods.push(method);
-  if (process.env.FAKE_ACP_RPC_DUMP) writeFileSync(process.env.FAKE_ACP_RPC_DUMP, JSON.stringify(rpcMethods));
+  if (process.env.FAKE_ACP_RPC_DUMP) {
+    const temporary = `${process.env.FAKE_ACP_RPC_DUMP}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify(rpcMethods));
+    renameSync(temporary, process.env.FAKE_ACP_RPC_DUMP);
+  }
   if (process.env.FAKE_ACP_RPC_APPEND_FILE) {
     try {
       appendFileSync(process.env.FAKE_ACP_RPC_APPEND_FILE, JSON.stringify({ pid: process.pid, method, cwd: process.cwd() }) + "\n");
@@ -715,6 +719,14 @@ function handle(msg: any) {
     }
     case "session/close":
       if (process.env.FAKE_ACP_SESSION_CLOSE === "error") out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "close failed" } });
+      else if (process.env.FAKE_ACP_SESSION_CLOSE_GATE) {
+        const gate = process.env.FAKE_ACP_SESSION_CLOSE_GATE;
+        const acknowledge = () => {
+          if (existsSync(gate)) result(msg.id, {});
+          else setTimeout(acknowledge, 10);
+        };
+        acknowledge();
+      }
       else if (process.env.FAKE_ACP_SESSION_CLOSE_MS) setTimeout(() => result(msg.id, {}), Number(process.env.FAKE_ACP_SESSION_CLOSE_MS));
       else result(msg.id, {});
       break;

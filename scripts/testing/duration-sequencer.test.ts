@@ -11,11 +11,12 @@ import viteConfig from "../../vite.config.ts";
 import { VITEST_SHARDS } from "../ci-scope.mjs";
 import { DurationSequencer, SHARD_WEIGHTS_FILE, loadPlatformShardWeights, loadShardWeights, planShards, weightKey } from "./duration-sequencer.ts";
 import { isPortableE2e } from "./host-e2e.ts";
+import { TEST_INCLUDE } from "./test-suites.ts";
 import { buildWeights, mergePlatformWeights, parseVitestLog, RUNNER_PLATFORMS } from "./update-shard-weights.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const WEIGHTS = loadShardWeights(ROOT);
-const FILES = globSync(viteConfig.test?.include ?? [], { cwd: ROOT, exclude: (file) => /(^|[\\/])node_modules$/.test(file) })
+const FILES = globSync(TEST_INCLUDE, { cwd: ROOT, exclude: (file) => /(^|[\\/])node_modules$/.test(file) })
   .map((file) => file.split(path.sep).join("/"))
   .sort();
 const specs = (files: readonly string[]) => files.map((file) => ({ moduleId: path.join(ROOT, file) }) as TestSpecification);
@@ -141,12 +142,16 @@ describe("update-shard-weights", () => {
       "2026-10-06T10:03:21.1Z  ↓ scripts/testing/cloud-preview.e2e.test.ts (1 test | 1 skipped)",
       "2026-10-06T10:03:22.1Z    ❯ server/b.test.ts:12:3",
       "2026-10-06T10:03:23.1Z  × server/c.test.ts (3 tests | 1 failed) 9000ms",
+      " ✓ |unit| shared/widget.test.ts (40 tests) 22ms",
+      " ✓ |integration| server/index.test.ts (306 tests) 164000ms",
     ].join("\n");
     expect(Object.fromEntries(parseVitestLog(log))).toEqual({
       "server/drivers/acp/acp.test.ts": 41.75,
       "server/a.e2e.test.ts": 316.8,
       "scripts/testing/cloud-preview.e2e.test.ts": 0,
       "server/c.test.ts": 9,
+      "shared/widget.test.ts": 0.022,
+      "server/index.test.ts": 164,
     });
   });
 

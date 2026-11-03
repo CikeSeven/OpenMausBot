@@ -17,7 +17,12 @@ afterEach(async () => {
   broker?.destroy();
   events?.close();
   if (fixture) {
-    console.info(JSON.stringify({ logPath: fixture.info.logPath }));
+    const evidencePath = `${fixture.info.logPath}.automation.json`;
+    const bots = await fetch(`${fixture.info.url}/api/bots?messages=200`, { signal: AbortSignal.timeout(2_000) })
+      .then(response => response.json()).catch(error => ({ error: String(error) }));
+    const trace = join(fixture.info.dataDir, "room-plan.json.evidence.jsonl");
+    writeFileSync(evidencePath, JSON.stringify({ bots, trace: existsSync(trace) ? readFileSync(trace, "utf8") : "" }, null, 2), { mode: 0o600 });
+    console.info(JSON.stringify({ logPath: fixture.info.logPath, evidencePath }));
     await fixture.close();
   }
   fixture = events = broker = undefined;
@@ -222,7 +227,7 @@ it("asks the person in the main chat when a run needs them, and their answer the
   const s = await server();
   s.script([
     { key: "run", match: [s.header("Acme replies")], reply: "I drafted a reply to Acme's invoice question.\nNEEDS INPUT: Should I send it?" },
-    { key: "answer", match: ["Yes, send it."], reply: "Sent.", expectContextIncludes: ["Your automation", "Acme replies", "Should I send it?"] },
+    { key: "answer", match: ["Yes, send it."], reply: "Sent.", expectContextIncludes: ["From routine", "Acme replies", "information only", "Should I send it?"] },
   ]);
   const id = await s.runNow(await s.routine("Acme replies"));
   await s.settled(id);
@@ -242,7 +247,7 @@ it("takes a 👍 on a run's question in the chat as the answer, with that report
   const s = await server();
   s.script([
     { key: "run", match: [s.header("Acme replies")], reply: "I drafted a reply to Acme's invoice question.\nNEEDS INPUT: Should I send it?" },
-    { key: "answer", match: ["reacted 👍"], reply: "Sent.", expectContextIncludes: ["Your automation", "Acme replies", "Should I send it?"] },
+    { key: "answer", match: ["reacted 👍"], reply: "Sent.", expectContextIncludes: ["From routine", "Acme replies", "information only", "Should I send it?"] },
   ]);
   const id = await s.runNow(await s.routine("Acme replies"));
   await s.reported(id, "posted");

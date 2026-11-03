@@ -96,12 +96,13 @@ describe("remote MCP servers through the broker", () => {
 
       expect(await probeMcpServer({ ...custom.orders, headers: {}, enabled: true })).toMatchObject({ ok: false, reason: "keys", status: 403 });
       expect(await probeMcpServer({ ...orders, enabled: true })).toMatchObject({ ok: true, tools: [{ name: "lookup_order" }] });
+      const probed = gateway.calls.length;
       const client = new RemoteMcpClient({ ...orders, headers: { "CF-Access-Client-Secret": "the engine's own guess" } });
       const signal = AbortSignal.timeout(10_000);
       await client.initialize("engine", signal);
       expect(await client.request("tools/call", { name: "lookup_order", arguments: { id: "1042" } }, signal)).toEqual({ content: [{ type: "text", text: "remote execution recorded" }] });
       await client.close();
-      expect(gateway.calls).toEqual([{ name: "lookup_order", arguments: { id: "1042" } }]);
+      expect(gateway.calls.slice(probed)).toEqual([{ name: "lookup_order", arguments: { id: "1042" } }]);
       expect(gateway.seenHeaders.filter((headers) => headers["cf-access-client-id"] === id && headers["cf-access-client-secret"] === secret).length).toBeGreaterThanOrEqual(3);
     } finally {
       await new Promise((resolve) => bridge.close(resolve));

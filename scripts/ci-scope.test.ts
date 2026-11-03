@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   ALL_OS, AREA_CHECKS, ciOutputs, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, QUEUED_SCOPE, SELECTABLE_JOBS,
-  selectCiScope,
+  selectCiScope, macosReason,
   selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
 } from "./ci-scope.mjs";
 import { HOST_E2E } from "./testing/host-e2e.ts";
@@ -20,7 +20,7 @@ const ALL = ["macos-latest", "ubuntu-latest", "windows-latest"];
 const PR = ["ubuntu-latest", "windows-latest"];
 const LINUX = ["ubuntu-latest"];
 const MAIN = ["ubuntu-latest", "windows-latest"];
-const SERVER_JOBS = ["vitest", "behavior-evals", "packaged-server", "electron-smokes", "foss", "ui-smoke", "browser-identity", "package-linux", "browser-driver"];
+const SERVER_JOBS = ["vitest", "behavior-evals", "packaged-server", "foss", "ui-smoke", "browser-identity"];
 const temporaryDirectories: string[] = [];
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -117,7 +117,7 @@ describe("CI path scope", () => {
 
   it.each([
     ["server/index.ts"], ["shared/types.ts"], ["companion/src/index.ts"], ["enterprise/license.ts"], ["evals/runners/run-evals.ts"],
-    ["skills/pdf/SKILL.md"], ["cloudflare/composio-broker/src/index.ts"], ["Dockerfile"], ["deploy/podman/run.sh"],
+    ["skills/pdf/SKILL.md"], ["cloudflare/composio-broker/src/index.ts"],
     ...SRC_OUTSIDE_RENDERER.map((file) => [file]),
   ])("runs every check that runs the server for %j", (file) => {
     expect(selectCiScope([file])).toEqual({ areas: ["server"], checks: checks("server") });
@@ -130,7 +130,32 @@ describe("CI path scope", () => {
     });
 
   it.each([["electron/main.mjs"], ["build/icon.icns"], ["electron-builder.yml"], ["index.html"], ["rail.html"]])("runs the server's checks for the desktop's %j", (file) => {
-    expect(selectCiScope([file])).toEqual({ areas: ["desktop"], checks: checks("server") });
+    expect(selectCiScope([file])).toEqual({ areas: ["desktop"], checks: checks("desktop") });
+  });
+
+  it("selects browser-driver checks for browser implementation changes", () => {
+    expect(selectCiScope(["server/browser/cdp/connection.ts"]))
+      .toEqual({ areas: ["browser"], checks: checks("browser") });
+    expect(selectCiScope(["server/index.ts"]).checks).not.toEqual(expect.arrayContaining(["package-linux", "browser-driver", "electron-smokes"]));
+    expect(selectCiScope(["electron/main.mjs"]).checks).toEqual(expect.arrayContaining(["package-linux", "electron-smokes"]));
+  });
+
+  it.each(["Dockerfile", ".dockerignore", "compose.yaml", "deploy/podman/run.sh"])("qualifies the browser inside a changed container runtime: %s", file => {
+    expect(selectCiScope([file])).toEqual({ areas: ["runtime"], checks: checks("runtime") });
+  });
+
+  it("keeps macOS smokes for host paths, renderer dependencies and changed platform code", () => {
+    expect(macosReason({ files: ["server/mac-voices.ts"] })).toBeTruthy();
+    expect(macosReason({ files: [SRC_OUTSIDE_RENDERER[0]] })).toBeTruthy();
+    expect(macosReason({ files: ["server/voice.ts"], lines: () => ['+if (process.platform === "darwin") speak();'] })).toBeTruthy();
+    expect(macosReason({ files: ["server/voice.ts"], lines: () => ["+const text = reply.text;"] })).toBeNull();
+    expect(macosReason({ files: [], lines: () => { throw new Error("missing diff"); } })).toBeTruthy();
+  });
+
+  it("runs Windows for changes to CLI lookup, installation and process launch", () => {
+    for (const file of ["server/env-path.ts", "server/procs.ts", "server/engine-install.ts", "server/engine-standalone.ts", "server/server-launcher.ts"]) {
+      expect(windowsReason({ files: [file] }), file).toBe(file);
+    }
   });
 
   it("runs only the control-plane job for the control plane", () => {
@@ -779,7 +804,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
 
   it("runs the Windows jobs for the desktop app", async () => {
     const { directory, payload } = serverChange("app\n", "electron/main.mjs");
-    expect((await runPullRequest(directory, payload)).output).toEqual(serverJobs(PR));
+    expect((await runPullRequest(directory, payload)).output).toEqual(ciOutputs(selectCiScope(["electron/main.mjs"]), PR));
   });
 
   it("runs the Windows jobs for the label the pull request has now, so a re-run after labelling runs them", async () => {

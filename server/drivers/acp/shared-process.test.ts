@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,7 +53,7 @@ beforeEach(() => {
   });
 });
 
-async function fixture(support: Partial<AcpSupport> = {}, environment: Record<string, string> = {}): Promise<Fixture> {
+async function fixture(support: Partial<AcpSupport> = {}, environment: Record<string, string> | ((scratch: string) => Record<string, string>) = {}): Promise<Fixture> {
   const scratch = mkdtempSync(join(tmpdir(), "omb-acp-shared-"));
   scratches.push(scratch);
   const spawned: ChildProcess[] = [];
@@ -62,7 +62,7 @@ async function fixture(support: Partial<AcpSupport> = {}, environment: Record<st
   const instance = await driver.create({
     instanceId: "shared-test", displayName: "Shared Test", enabled: true,
     config: { cli: FAKE_CLI, fullAuto: true, workspace: scratch },
-    environment: { FAKE_ACP_RPC_DUMP: join(scratch, "methods.json"), FAKE_ACP_SESSION_CLOSE: "1", ...environment },
+    environment: { FAKE_ACP_RPC_DUMP: join(scratch, "methods.json"), FAKE_ACP_SESSION_CLOSE: "1", ...(typeof environment === "function" ? environment(scratch) : environment) },
   });
   instances.push(instance);
   const recorder = recordEvents(instance.adapter);
@@ -84,9 +84,10 @@ const exited = (child: ChildProcess) => new Promise<void>((resolve) => {
 
 afterEach(async () => {
   for (const instance of instances.splice(0)) await instance.dispose();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   started.clear();
-  for (const scratch of scratches.splice(0)) removeTempDir(scratch);
+  for (const scratch of scratches.splice(0)) await removeTempDir(scratch);
 });
 
 describe("ACP threads sharing one agent process", () => {
@@ -232,6 +233,10 @@ describe("ACP threads sharing one agent process", () => {
   });
 
   describe("a session that ignores session/cancel", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+
     const promptsSent = async (f: Fixture, count: number) => {
       const sent = () => { try { return f.methods().filter((method) => method === "session/prompt").length; } catch { return 0; } };
       while (sent() < count) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -254,6 +259,7 @@ describe("ACP threads sharing one agent process", () => {
         next = f.instance.adapter.sendTurn({ threadId: "thread-a", text: "fixture", cwd: join(f.scratch, "thread-a"), approvalMode: "full" });
       });
       await f.instance.adapter.interruptTurn("thread-b");
+      await vi.advanceTimersByTimeAsync(5_000);
       expect((await stopped).done).toMatchObject({ ok: true, stopReason: "cancelled" });
       expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
       expect((await other).done).toMatchObject({ ok: false });
@@ -270,25 +276,32 @@ describe("ACP threads sharing one agent process", () => {
       await promptsSent(f, 2);
       const [child] = f.spawned;
       await f.instance.adapter.interruptTurn("thread-a");
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.advanceTimersByTimeAsync(200);
       await f.instance.adapter.interruptTurn("thread-b");
+      await vi.advanceTimersByTimeAsync(4_800);
+      await expect.poll(() => f.methods().includes("session/close")).toBe(true);
+      await vi.advanceTimersByTimeAsync(200);
       expect((await second).done).toMatchObject({ ok: true, stopReason: "cancelled" });
       expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
-      // Its session/close went unanswered when the process ended, so it settles once that request times out.
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(await f.recorder.until((event) => event.type === "turn.completed" && event.threadId === "thread-a", 15_000))
         .toMatchObject({ ok: true, stopReason: "cancelled" });
     });
 
     it("settles Stop only once the agent confirms session/close, and keeps the process for the other threads", async () => {
-      const f = await fixture({}, { FAKE_ACP_HANG_ON: "HANG", FAKE_ACP_IGNORE_CANCEL: "1", FAKE_ACP_SESSION_CLOSE_MS: "600" });
+      const f = await fixture({}, scratch => ({ FAKE_ACP_HANG_ON: "HANG", FAKE_ACP_IGNORE_CANCEL: "1", FAKE_ACP_SESSION_CLOSE_GATE: join(scratch, "close.gate") }));
       await f.run("thread-a");
       const stopped = f.run("thread-b", { text: "HANG" });
       await promptsSent(f, 2);
       const [child] = f.spawned;
-      const start = Date.now();
       await f.instance.adapter.interruptTurn("thread-b");
+      expect(f.methods()).not.toContain("session/close");
+      expect(f.recorder.events.some(event => event.type === "turn.completed" && event.threadId === "thread-b")).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect.poll(() => f.methods().includes("session/close")).toBe(true);
+      expect(f.recorder.events.some(event => event.type === "turn.completed" && event.threadId === "thread-b")).toBe(false);
+      writeFileSync(join(f.scratch, "close.gate"), "acknowledge");
       expect((await stopped).done).toMatchObject({ ok: true, stopReason: "cancelled" });
-      expect(Date.now() - start).toBeGreaterThanOrEqual(5_500);
       expect(child!.exitCode).toBeNull();
       expect((await f.run("thread-a")).done).toMatchObject({ ok: true });
       expect(f.spawned).toHaveLength(1);
@@ -300,6 +313,7 @@ describe("ACP threads sharing one agent process", () => {
       await promptsSent(f, 1);
       const [child] = f.spawned;
       await f.instance.adapter.interruptTurn("thread-a");
+      await vi.advanceTimersByTimeAsync(5_000);
       expect((await stopped).done).toMatchObject({ ok: true, stopReason: "cancelled" });
       expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
     });
@@ -317,6 +331,7 @@ describe("ACP threads sharing one agent process", () => {
         return false;
       });
       await f.instance.adapter.interruptTurn("thread-a");
+      await vi.advanceTimersByTimeAsync(5_000);
       const { done, events } = await stopped;
       expect(done).toMatchObject({ ok: false });
       expect(events.some((event) => event.type === "runtime.error" && /could not be ended/.test(event.message))).toBe(true);

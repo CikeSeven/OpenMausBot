@@ -7,6 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { DurationSequencer } from "./scripts/testing/duration-sequencer.ts";
 import { hostE2eOnly, portableE2eFiles } from "./scripts/testing/host-e2e.ts";
 import { hostTimeout } from "./server/testing/host-timeout.ts";
+import { INTEGRATION_INCLUDE, TEST_INCLUDE, UNIT_EXCLUDE, UNIT_INCLUDE, UNIT_TEST_FILES, unitWorkers } from "./scripts/testing/test-suites.ts";
 
 // The About dialog's version, inlined at build time: the preload bridge is
 // absent in dev.
@@ -30,19 +31,6 @@ function railPage(): Plugin {
   };
 }
 
-const include = [
-  "evals/**/*.test.ts",
-  "server/**/*.test.ts",
-  "electron/**/*.test.mjs",
-  "src/**/*.test.ts",
-  "shared/**/*.test.ts",
-  "companion/**/*.test.ts",
-  "enterprise/**/*.test.ts",
-  "connector/**/*.test.ts",
-  "scripts/**/*.test.mjs",
-  "scripts/**/*.test.ts",
-];
-
 export default defineConfig({
   plugins: [react(), tailwindcss(), railPage()],
   build: {
@@ -53,13 +41,34 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include,
-    // OMB_VITEST_E2E=host (CI's Windows and macOS shards) leaves the e2e files that run on Linux only.
-    exclude: [...configDefaults.exclude, ...(hostE2eOnly() ? portableE2eFiles(root, include) : [])],
-    setupFiles: ["server/testing/setup.ts", "src/testing/all-locales.ts"],
-    // the suite spawns fake provider CLIs and a real harness server;
-    // parallel files introduce load-sensitive flakes for no win
-    fileParallelism: false,
+    pool: "forks",
+    isolate: true,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: UNIT_INCLUDE,
+          exclude: [...configDefaults.exclude, ...UNIT_EXCLUDE],
+          setupFiles: ["scripts/testing/sandbox.ts", "src/testing/all-locales.ts", "src/testing/react.ts"],
+          fileParallelism: true,
+          maxWorkers: unitWorkers(),
+          sequence: { groupOrder: 0 },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "integration",
+          include: INTEGRATION_INCLUDE,
+          exclude: [...configDefaults.exclude, ...UNIT_TEST_FILES, ...(hostE2eOnly() ? portableE2eFiles(root, TEST_INCLUDE) : [])],
+          setupFiles: ["server/testing/setup.ts", "src/testing/all-locales.ts", "src/testing/react.ts"],
+          fileParallelism: false,
+          maxWorkers: 1,
+          sequence: { groupOrder: 1 },
+        },
+      },
+    ],
     // --shard splits the files by recorded CI seconds, not count
     sequence: { sequencer: DurationSequencer },
     // Known flakes in scripts/testing/ci-retry-list.json get two retries in

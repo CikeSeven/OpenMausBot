@@ -26,6 +26,28 @@ export const CLOUD_HOST = "omb-t-5e6d7c8b9a0f.fly.dev";
 const EDGE = { host: CLOUD_HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${CLOUD_HOST}` };
 const parse = (text: string) => { try { return JSON.parse(text); } catch { return null; } };
 
+function advanceChildClock(child: ChildProcess, ms: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const id = randomBytes(16).toString("hex");
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      child.off("message", received);
+      child.off("exit", exited);
+      if (error) reject(error);
+      else resolve();
+    };
+    const received = (message: unknown) => {
+      if (message && typeof message === "object" && "type" in message && "id" in message
+        && message.type === "omb:fixture-clock:advanced" && message.id === id) finish();
+    };
+    const exited = () => finish(new Error("Fixture exited before advancing its clock"));
+    const timeout = setTimeout(() => finish(new Error("Fixture clock did not acknowledge an advance")), 5_000);
+    child.on("message", received);
+    child.once("exit", exited);
+    child.send({ type: "omb:fixture-clock:advance", id, ms }, error => { if (error) finish(error); });
+  });
+}
+
 export interface CloudSendFixture {
   root: string;
   desktopBase: string;
@@ -91,6 +113,7 @@ export interface CloudSendFixture {
   /** Another computer of the same person, with its own server, app and MausBot Cloud sign-in, that can move to the same
    * My Cloud. `label`: its name (OMB_ENVIRONMENT_LABEL). */
   addDesk(options: { label: string }): Promise<CloudSendDesk>;
+  advanceTime(ms: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -158,7 +181,7 @@ exports.createClient = async ({ auth }) => {
  * with an installation of its own as the desktop app registers one, My Cloud registering itself as a Cloud home does.
  * `env`: more of both servers' environment (a fake HighLevel and its relay). `cloudEngine`: lines run at the start of My
  * Cloud's synthetic Claude CLI, to script its turns (fake-claude-cli.ts). */
-export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswordToken = onePasswordToken, toolCalls = 0, broker, env = {}, cloudEnv = {}, cloudEngine = "", desktopEngine = "", space, cloudSignedIn = true, team }: {
+export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswordToken = onePasswordToken, toolCalls = 0, broker, env = {}, cloudEnv = {}, cloudEngine = "", desktopEngine = "", space, cloudSignedIn = true, team, clock = false }: {
   onePasswordToken: string; cloudOnePasswordToken?: string; toolCalls?: number;
   /** A Team Cloud too (OMB_CLOUD_ROLE=team), with its own environment and synthetic Claude CLI lines. */
   team?: { id: string; name: string; env?: NodeJS.ProcessEnv; engine?: string };
@@ -173,6 +196,7 @@ export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswor
   space?: { disk(): unknown; grow(sizeGb: number): Promise<unknown> };
   /** False: My Cloud's own Claude is signed out, as on a new Cloud. */
   cloudSignedIn?: boolean;
+  clock?: boolean;
 }): Promise<CloudSendFixture> {
   const root = mkdtempSync(join(tmpdir(), "omb-cloud-send-"));
   const secret = randomBytes(32).toString("base64url");
@@ -181,6 +205,7 @@ export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswor
   const labels: string[] = [];
   let logs = "";
   const children = new Set<ChildProcess>();
+  let clockOffset = 0;
   const remember = async (response: Response) => { answers.push(await response.clone().text()); return response; };
 
   async function start(name: string, own: NodeJS.ProcessEnv, port: number, extra: string[] = [], ipc = false, acceptedToken = onePasswordToken, calls = 0, engine = "", signedIn = true): Promise<ChildProcess> {
@@ -202,11 +227,13 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
       claude: { driver: "claudeAgent", displayName: "Claude", config: { cli } },
     } }));
     const offline = `data:text/javascript,${encodeURIComponent('const real = globalThis.fetch; const admin = process.env.FIXTURE_ADMIN_STAND_IN; globalThis.fetch = async (url, init) => admin && String(url).startsWith("https://cloud.example.test/") ? real(admin + String(url).slice(26), init) : String(url).startsWith("http://127.0.0.1:") ? real(url, init) : new Response("offline fixture", { status: 503 });')}`;
-    const child = spawn(process.execPath, ["--import", offline, ...extra, join(SERVER_DIR, "index.ts")], {
+    const clockImport = new URL("./fixture-clock.ts", import.meta.url);
+    clockImport.searchParams.set("offset", String(clockOffset));
+    const child = spawn(process.execPath, ["--import", offline, ...(clock ? ["--import", clockImport.href] : []), ...extra, join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env: { PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), HOME: home, USERPROFILE: home, OMB_DATA_DIR: dataDir,
-        OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_DUCKDB_DIR: fakeOnePassword(join(home, "native"), acceptedToken), ...env, ...own },
-      stdio: ["ignore", "pipe", "pipe", ...(ipc ? ["ipc" as const] : [])],
+        OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_DUCKDB_DIR: fakeOnePassword(join(home, "native"), acceptedToken), OMB_BOT_BOX: "off", ...env, ...own },
+      stdio: ["ignore", "pipe", "pipe", ...(ipc || clock ? ["ipc" as const] : [])],
     });
     children.add(child);
     child.on("close", () => children.delete(child));
@@ -547,6 +574,11 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     team: teamFixture,
     grant: async (label) => ({ origin: cloudBase, code: await mintCode(label), expiresAt: Date.now() + 300_000 }),
     addDesk,
+    async advanceTime(ms) {
+      if (!clock || !Number.isSafeInteger(ms) || ms < 0) throw new Error("Advancing time requires an enabled fixture clock and nonnegative milliseconds");
+      await Promise.all([...children].map(child => advanceChildClock(child, ms)));
+      clockOffset += ms;
+    },
     async close() {
       main.close();
       for (const desk of desks) desk.close();

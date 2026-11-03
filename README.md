@@ -402,7 +402,9 @@ its trial, and using a cloud computer may incur charges.
 
 ```sh
 pnpm typecheck     # app + server
-pnpm test          # unit, driver, API, and desktop capability tests
+pnpm test          # parallel unit tests: renderer, shared modules, server logic
+pnpm test:integration # isolated server, driver, API, and end-to-end tests
+pnpm test:all      # full local regression, including evals and packaged server
 pnpm build         # typecheck + production build
 pnpm check:electron # syntax-check Electron main/preload files
 pnpm package:win   # Windows installer + zip → release/

@@ -37,10 +37,11 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
     snapshot = await world.snapshot(ctx);
   } catch (failure) {
     error = failure instanceof Error ? failure.message : String(failure);
+    snapshot = await world.snapshot(ctx).catch(() => undefined);
   } finally {
     await world.close().catch(() => undefined);
   }
-  const assertions = snapshot === undefined ? [] : evaluateAssertions(scenario.assertions, snapshot);
+  const assertions = error !== undefined || snapshot === undefined ? [] : evaluateAssertions(scenario.assertions, snapshot);
   return {
     id: scenario.id,
     title: scenario.title,

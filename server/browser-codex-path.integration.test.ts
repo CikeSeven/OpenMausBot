@@ -42,7 +42,7 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
     mkdirSync(data);
     // The extensionless executable must exercise /usr/bin/env node, rather
     // than the driver's explicit .ts-file launch through process.execPath.
-    const codex = join(bin, "codex");
+    const codex = join(bin, "omb-fixture-codex");
     writeFileSync(codex, '#!/usr/bin/env node\nimport("./fake-codex-app-server.mjs");\n', { mode: 0o755 });
     // A Linux system Node may precede our symlink; it need not support .ts.
     writeFileSync(join(bin, "fake-codex-app-server.mjs"), stripTypeScriptTypes(
@@ -58,7 +58,7 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
       instances: Object.fromEntries(["default", "absolute"].map((id) => [id, {
         driver: "codex",
         environment: { FAKE_CODEX_DUMP: join(home, `${id}.json`) },
-        config: { cli: id === "default" ? "codex" : codex },
+        config: { cli: id === "default" ? "omb-fixture-codex" : codex },
       }])),
     }));
     const port = await freePortBlock([0, 1]);

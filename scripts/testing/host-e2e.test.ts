@@ -3,11 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import viteConfig from "../../vite.config.ts";
 import { E2E, HOST_E2E, hostE2eOnly, isPortableE2e, portableE2eFiles } from "./host-e2e.ts";
+import { TEST_INCLUDE } from "./test-suites.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const INCLUDE = viteConfig.test?.include ?? [];
+const INCLUDE = TEST_INCLUDE;
 // A test, or a whole describe, that Linux skips: what it checks runs on the Windows and macOS shards or nowhere.
 const SKIPPED_ON_LINUX = /process\.platform\s*===\s*"linux"\s*\?\s*(?:it|test|describe)\.skip\b|\.skipIf\(\s*process\.platform\s*===\s*"linux"\s*\)|\.runIf\(\s*process\.platform\s*===\s*"(?:darwin|win32)"\s*\)/;
 

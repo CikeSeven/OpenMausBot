@@ -97,10 +97,19 @@ jobs:
         run: node scripts/ci-scope.mjs
       - run: pnpm install --frozen-lockfile
       - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts
+        run: pnpm exec vitest run --project=unit --project=integration scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/test-suites.test.ts scripts/testing/verification-docs.test.ts scripts/testing/file-size-ratchet.test.ts scripts/testing/comment-history.test.ts server/drivers/tool-scope-coverage.test.ts src/lib/analytics-allowlist.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - run: pnpm lint
+      - name: Cache typecheck state
+        if: steps.scope.outputs.build == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            tsconfig.tsbuildinfo
+            .omb-scratch/typecheck/
+          key: typecheck-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json') }}-${{ github.sha }}
+          restore-keys: typecheck-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json') }}-
       # A pull request that changes only docs, tests under scripts/ or the
       # control plane cannot change what these three check.
       - if: steps.scope.outputs.build == 'true'
@@ -118,6 +127,15 @@ jobs:
         # bubblewrap box wherever bwrap works: here, once the step below drops the capability bwrap refuses to start
         # with, and never on a GitHub runner.
         run: sudo rm -f /usr/bin/bwrap /usr/local/bin/{agent,claude,codex,cua-driver,cursor-agent,hermes,hermes-acp,hermes-agent,kimi,openclaw,opencode,pi,prime-agent,vibe,vibe-acp}
+      - name: Cache Electron downloads
+        if: steps.scope.outputs.linux_lanes
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Prepare Electron test runtime
         if: steps.scope.outputs.linux_lanes
         run: node --input-type=commonjs -e "require('electron')"
@@ -138,12 +156,22 @@ jobs:
         env:
           OMB_VITEST_RETRY_LOG: ${{ runner.temp }}/vitest-retries.jsonl
         run: node scripts/testing/ci-retry-summary.mjs
+      - name: Upload Linux test results
+        if: ${{ !cancelled() && steps.scope.outputs.linux_lanes }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vitest-ubuntu-boat-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vitest-*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload eval run reports on failure
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure() && steps.scope.outputs.linux_lanes
         with:
           name: behavior-evals-reports-${{ github.sha }}-${{ github.run_attempt }}
-          path: evals/reports/runs/
+          path: |
+            evals/reports/runs/
+            .omb-scratch/eval-failures/
           if-no-files-found: warn
           retention-days: 7
 
@@ -182,6 +210,14 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Cache Electron downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Prepare Electron test runtime
         # Electron lazily downloads its runtime on first import. Resolve it
         # before Vitest starts so a cold download cannot consume the fixture
@@ -197,7 +233,7 @@ jobs:
           OMB_VITEST_RETRY_LOG: ${{ runner.temp }}/vitest-retries.jsonl
           OMB_VITEST_E2E: ${{ matrix.e2e }}
           OMB_VITEST_SUBSET: ${{ matrix.files }}
-        run: pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} --reporter=default --reporter=github-actions
+        run: pnpm exec vitest run --project=unit --project=integration ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} --reporter=default --reporter=github-actions --reporter=json --outputFile.json="${{ runner.temp }}/vitest-${{ matrix.shard }}.json"
       - name: Report flaky tests that needed a retry
         # Known flakes (scripts/testing/ci-retry-list.json) get two retries in
         # CI. A pass after a retry is still listed in the job summary, so the
@@ -212,6 +248,14 @@ jobs:
         # that never exits would otherwise hold the job to its cap.
         timeout-minutes: 5
         run: pnpm broker:test && pnpm test:electron
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vitest-${{ matrix.os }}-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vitest-*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   behavior-evals:
     needs: static
@@ -256,7 +300,9 @@ jobs:
         if: failure()
         with:
           name: behavior-evals-reports-${{ github.sha }}-${{ github.run_attempt }}
-          path: evals/reports/runs/
+          path: |
+            evals/reports/runs/
+            .omb-scratch/eval-failures/
           if-no-files-found: warn
           retention-days: 7
 
@@ -324,6 +370,14 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Cache Electron downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Prepare Electron test runtime
         run: node --input-type=commonjs -e "require('electron')"
       - name: Packaged server smoke (macOS)

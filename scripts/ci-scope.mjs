@@ -13,14 +13,11 @@ export const SELECTABLE_JOBS = [
   "foss", "control-plane", "ui-smoke", "browser-identity", "package-linux", "browser-driver",
 ];
 
-// The server imports Electron and renderer modules, and the macOS smokes run
-// the packaged server inside Electron, so a server change and a desktop change
-// can affect the same checks.
 const SERVER_CHECKS = [
-  "build", "linux-tests", "host-tests", "behavior-evals", "packaged-server", "foss", "electron-smokes",
-  "ui-smoke", "browser-identity", "browser-driver", "package-linux",
+  "build", "linux-tests", "host-tests", "behavior-evals", "packaged-server", "foss", "ui-smoke", "browser-identity",
 ];
-const EVERY_CHECK = [...SERVER_CHECKS, "windows-cua", "cloudflared-linux-arm64", "control-plane"];
+const DESKTOP_CHECKS = [...SERVER_CHECKS, "electron-smokes", "package-linux"];
+const EVERY_CHECK = [...DESKTOP_CHECKS, "browser-driver", "windows-cua", "cloudflared-linux-arm64", "control-plane"];
 
 /** What a pull request's change in each area can affect. */
 export const AREA_CHECKS = {
@@ -29,9 +26,11 @@ export const AREA_CHECKS = {
   web: ["build", "linux-tests", "ui-smoke"],
   "script-tests": ["linux-tests", "host-tests", "ui-smoke", "browser-identity"],
   server: SERVER_CHECKS,
-  desktop: SERVER_CHECKS,
+  browser: [...SERVER_CHECKS, "browser-driver"],
+  runtime: [...SERVER_CHECKS, "browser-driver"],
+  desktop: DESKTOP_CHECKS,
   // The Windows CUA job starts these the way the installed app does, then lends the PC's screen through them.
-  "windows-computer-control": [...SERVER_CHECKS, "windows-cua"],
+  "windows-computer-control": [...DESKTOP_CHECKS, "windows-cua"],
   "control-plane": ["control-plane"],
   everything: EVERY_CHECK,
 };
@@ -83,7 +82,9 @@ const AREAS = [
   [/^scripts\/.+\.test\.[cm]?[jt]sx?$/, "script-tests"],
   [/^src\/locales\/(?:(?!en\.json$)[^/]+\.json|[^/]+\.test\.ts)$/, "locales"],
   [/^(?:src|public)\/|^[^/]+-preview\.html$/, "web"],
-  [/^(?:server|shared|enterprise|companion|evals|skills|deploy|cloudflare\/composio-broker)\/|^(?:Dockerfile|\.dockerignore|compose\.yaml)$/, "server"],
+  [/^server\/(?:browser\/|browser[-.])/, "browser"],
+  [/^deploy\/|^(?:Dockerfile|\.dockerignore|compose\.yaml)$/, "runtime"],
+  [/^(?:server|shared|enterprise|companion|evals|skills|cloudflare\/composio-broker)\//, "server"],
   [/^electron\/(?:cua|cua-failure|cua-connection|capabilities|screen-status|shared-cua-connection|shared-computer-access|lent-screen-tools|lent-screen-failures|paced-typing)\.[cm]js$/, "windows-computer-control"],
   [/^(?:electron|build)\/|^(?:electron-builder\.yml|index\.html|rail\.html)$/, "desktop"],
   [/^cloudflare\/control-plane\//, "control-plane"],
@@ -131,8 +132,9 @@ export const WINDOWS_PATH = new RegExp([
   String.raw`^(?:electron|build|third_party)/`,
   String.raw`^(?:electron-builder\.yml|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|\.gitattributes|vite\.config\.ts)$`,
   String.raw`^\.github/workflows/ci\.yml$|^scripts/ci-scope\.mjs$`,
-  String.raw`^scripts/testing/(?:host-e2e\.ts|duration-sequencer\.ts|vitest-shard-weights\.json|ci-retry-[^/]+)$|^server/testing/host-timeout\.ts$`,
+  String.raw`^scripts/testing/(?:host-e2e\.ts|duration-sequencer\.ts|vitest-shard-weights\.json|ci-retry-[^/]+|test-suites\.ts|unit-tests\.json|sandbox\.ts|run-test-file\.mjs)$|^server/testing/host-timeout\.ts$`,
   String.raw`^scripts/(?:build|bundle|prepare|package|smoke|after-pack|stage)[^/]*$`,
+  String.raw`^server/(?:env-path|procs|engine-install|engine-standalone|server-launcher)\.ts$`,
 ].join("|"), "i");
 
 /** A changed line of code that names Windows or one of its APIs. */
@@ -155,6 +157,18 @@ export function windowsReason({ files, labels = [], hostE2e = [], lines = () => 
   }
   const line = changed.find((text) => /^[+-](?![+-]{2} )/.test(text) && WINDOWS_TEXT.test(text));
   return line ? `the changed line ${JSON.stringify(line.slice(0, 80))}` : null;
+}
+
+export function macosReason({ files, lines = () => [] }) {
+  const file = files.find((path) => SRC_OUTSIDE_RENDERER.includes(path)
+    || /(?:^|[/._-])(?:mac|macos|darwin|swift|tcc)(?:[/._-]|$)|\.(?:swift|mm)$/.test(path));
+  if (file) return file;
+  try {
+    return lines().find((line) => /^[+-](?![+-]{2} )/.test(line)
+      && /\bdarwin\b|\bmacOS\b|\bTCC\b|\bosascript\b|\/usr\/bin\/say\b/.test(line)) ?? null;
+  } catch {
+    return "unreadable platform-sensitive changes";
+  }
 }
 
 /** True when two package.json texts differ only in the top-level "version"
@@ -361,6 +375,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         if (why) vitestOs = WINDOWS_OS;
         console.log(why ? `CI scope: Windows runs for ${why}`
           : `CI scope: nothing here can break Windows first, so its jobs wait for main (label the PR "${WINDOWS_LABEL}" and re-run to run them)`);
+        if (macosReason({ files, lines: () => changedCodeLines(`${base}...${head}`) })) {
+          scope = { ...scope, checks: [...new Set([...scope.checks, "electron-smokes"])].sort() };
+        }
       }
     } catch (error) {
       console.warn(`CI scope: using all checks because the pull request diff is unavailable: ${error.message}`);

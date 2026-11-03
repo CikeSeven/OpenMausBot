@@ -3,8 +3,7 @@
 // OMB_VITEST_RETRY_LOG for the job summary. Retries are bounded per file: once
 // a listed test fails every attempt, the file's later listed tests get none.
 import { appendFileSync } from "node:fs";
-import type { RunnerTask, RunnerTestCase } from "vitest";
-import { VitestTestRunner } from "vitest/runners";
+import { TestRunner, type RunnerTask, type RunnerTestCase } from "vitest";
 import { CI_RETRIES, findRetryEntry, loadRetryList, retriesInCi, testIdentity } from "./ci-retry-list.mjs";
 
 // Fails open: the list is a CI convenience, and a list that cannot be read
@@ -26,7 +25,7 @@ function safeRetryList() {
   }
 }
 
-export default class CiRetryRunner extends VitestTestRunner {
+export default class CiRetryRunner extends TestRunner {
   /** Files where a listed test failed every attempt: no more retries there. */
   private readonly exhausted = new Set<string>();
 

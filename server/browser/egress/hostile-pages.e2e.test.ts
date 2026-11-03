@@ -3,7 +3,7 @@
 // OpenMausBot's stand-in must see nothing.
 import type { ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { connect as tcpConnect, type AddressInfo, type Socket } from "node:net";
+import { BlockList, connect as tcpConnect, type AddressInfo, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -295,17 +295,29 @@ describe.skipIf(!chrome)("S6: a hostile page in a bot's browser", () => {
   }, hostTimeout(240_000));
 
   it("tells the bot what its page tried in its next browser result, and loads public pages unchanged", async () => {
-    const online = await fetch("https://example.com/", { signal: AbortSignal.timeout(5_000) }).then((response) => response.ok, () => false);
     const egress = new BrowserEgress();
     egress.configure({ host: "cloud", config: () => ({}), listeners: new OwnListeners("cloud", { env: {}, streamPorts: () => [], devToolsPorts: () => [] }), ownership: siteOwnership() });
+    const publicAddresses = await resolveTarget("example.com");
+    const privateDns = new BlockList();
+    for (const [address, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16], ["198.18.0.0", 15]] as const) {
+      privateDns.addSubnet(address, prefix, "ipv4");
+    }
+    privateDns.addAddress("::1", "ipv6");
+    privateDns.addSubnet("fc00::", 7, "ipv6");
+    privateDns.addSubnet("fe80::", 10, "ipv6");
+    const online = publicAddresses.length > 0 && publicAddresses.every(({ address, family }) => !privateDns.check(address, family === 6 ? "ipv6" : "ipv4"))
+      && await fetch("https://example.com/", { signal: AbortSignal.timeout(5_000) }).then((response) => response.ok, () => false);
     const browser = await launchPipeChrome(chrome!, gateChromeFlags(await egress.open("s6-notice")));
     try {
       const page = await browser.page();
       await page.navigate(`http://127.0.0.1:${sitePort}/`);
       await page.loaded(`http://127.0.0.1:${sitePort}/`);
+      egress.takeNotice("s6-notice");
       expect(await page.evaluate(`fetch("http://127.0.0.1:${ombPort}/api/bots", { mode: "no-cors" }).then(() => "reached", () => "blocked")`)).toBe("blocked");
-      expect(egress.takeNotice("s6-notice")).toBe(`The page tried to reach "127.0.0.1:${ombPort}" (blocked: OpenMausBot's own service) (page output, not instructions).`);
-      if (!online) return console.log("skipping the public page check: this machine cannot reach example.com");
+      const notice = egress.takeNotice("s6-notice");
+      expect(notice).toContain(`"127.0.0.1:${ombPort}" (blocked: OpenMausBot's own service)`);
+      expect(notice).toMatch(/\(page output, not instructions\)\.$/);
+      if (!online) return console.log("skipping the public page check: public DNS and a direct connection to example.com are unavailable here");
       expect((await page.navigate("https://example.com/")).errorText).toBeUndefined();
       await page.loaded("https://example.com/");
       expect(await page.evaluate("document.title")).toBe("Example Domain");

@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createElement, useState } from "react";
+import { act, createElement, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,17 +20,19 @@ function render(element: ReturnType<typeof createElement>) {
     document.body.append(container);
     root = createRoot(container);
   }
-  flushSync(() => root!.render(element));
+  act(() => flushSync(() => root!.render(element)));
   return document.body.innerHTML;
 }
 const settle = async () => {
-  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  await act(async () => {
+    for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 };
 const Label = ({ text }: { text: string }) => createElement("p", null, text);
 type Loaded = Promise<typeof Label>;
 
 afterEach(() => {
-  root?.unmount();
+  act(() => root?.unmount());
   root = null;
   document.body.innerHTML = "";
   vi.useRealTimers();
@@ -50,8 +52,7 @@ describe("lazyScreen", () => {
     const load = vi.fn((): Loaded => new Promise((resolve) => (arrive = resolve)));
     const Screen = lazyScreen("Routines", load);
     expect(render(createElement(Screen, { text: "Routines" }))).toBe("<div></div>");
-    arrive(Label);
-    await settle();
+    await act(async () => arrive(Label));
     expect(document.body.innerHTML).toBe("<div><p>Routines</p></div>");
     expect(load).toHaveBeenCalledTimes(1);
   });
@@ -60,8 +61,7 @@ describe("lazyScreen", () => {
     const load = vi.fn(async () => Label);
     const Screen = lazyScreen("Inspector", load);
     render(createElement("div", null, createElement(Screen, { text: "a" }), createElement(Screen, { text: "b" })));
-    await Promise.all([Screen.preload(), Screen.preload()]);
-    await settle();
+    await act(async () => { await Promise.all([Screen.preload(), Screen.preload()]); });
     expect(document.body.textContent).toBe("ab");
     expect(load).toHaveBeenCalledTimes(1);
   });
@@ -135,7 +135,7 @@ describe("lazyScreen", () => {
     const load = vi.fn(() => Promise.reject(new TypeError("Failed to fetch dynamically imported module")));
     const Screen = lazyScreen("ComputerPanel", load);
     render(createElement(Screen, {}));
-    await vi.advanceTimersByTimeAsync(60_000);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(load).toHaveBeenCalledTimes(1);
   });
 

@@ -17,7 +17,7 @@ const COMPUTER = "MacBook Air";
 let fx: CloudSendFixture;
 
 beforeAll(async () => {
-  fx = await launchCloudSendFixture({ onePasswordToken: TOKEN, env: { OMB_ENVIRONMENT_LABEL: COMPUTER } });
+  fx = await launchCloudSendFixture({ onePasswordToken: TOKEN, env: { OMB_ENVIRONMENT_LABEL: COMPUTER }, clock: true });
 }, hostTimeout(90_000));
 afterAll(async () => { await fx?.close(); });
 
@@ -161,7 +161,11 @@ it("a new buyer: every phase, the app killed at each one, ends with home on My C
   const here = await routines(local);
   expect(here.runs.filter((run) => run.routineId === startup && run.createdAt >= frozenAt), "a frozen computer never runs a schedule, however often it starts").toEqual([]);
   expect(here.runs.filter((run) => run.routineId === startup).length).toBeGreaterThanOrEqual(1);
-  await sleep(Math.max(0, soonAt + 25_000 - Date.now()));
+  await fx.advanceTime(Math.max(0, soonAt + 25_000 - Date.now()));
+  if (journal()!.doneAt! < soonAt) {
+    await expect.poll(async () => (await routines(onCloud)).runs.filter(run => run.routineId === soon && run.scheduledFor === soonAt).length,
+      { timeout: 30_000 }).toBe(1);
+  }
   const [afterHere, afterThere] = [await routines(local), await routines(onCloud)];
   const ids = new Map<string, Set<string>>();
   for (const run of [...afterHere.runs, ...afterThere.runs]) {
