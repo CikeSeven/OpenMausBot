@@ -16,6 +16,7 @@ import { redactSecretsInText } from "../redact.ts";
 import { toolDetailPreview } from "../tool-summary.ts";
 import { ChatToolSessionError, chatToolNotices, composeToolSessions, mountChatTools, type ChatToolDefinition, type ChatToolSession, type ChatToolResult } from "./chat-mcp-tools.ts";
 import type { ModelWire } from "./wires/model-wire.ts";
+import { DELEGATE_TOOL, DELEGATE_TOOL_DEFINITION, runSubagents, serialized, subagentTasks, type SubagentContext, type SubagentLimits } from "./chat-subagents.ts";
 import { noteToolBudget } from "../tool-budgets.ts";
 import { assertImageTransport, chatImageBudget, chatToolImages, chatUserContent, type ChatContentPart } from "./chat-images.ts";
 import { promptHalves, volatileContextNote, withContextNote } from "./prompt-split.ts";
@@ -108,6 +109,9 @@ interface RuntimeOptions<Config> {
   effortLevels?: readonly EffortLevel[];
   /** A failed call is information the model reads and acts on, never a reason to end the turn; a refusal still is. */
   readsToolFailures?: boolean;
+  /** Offers the delegate tool. Tools named in `concurrentTools` may run in several subagents at once; every other call
+   * waits for the one before it, since a desktop or a browser tab serves one hand at a time. */
+  subagents?: SubagentLimits & { concurrentTools: ReadonlySet<string> };
   driverKind: string;
   apiKey: string;
   apiUrl: string;
@@ -639,7 +643,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         const local = options.tools === false ? undefined : options.localTools?.(turn, { signal: abort.signal, scope });
         try {
           const mounted = await mountChatTools(options.tools === false ? undefined : turn.integrations, abort.signal, options.computerUse, scope, turn.mcpCallTimeoutMs,
-            toolSchemaProfileFor({ url: options.apiUrl, model }), local?.definitions.length ?? 0);
+            toolSchemaProfileFor({ url: options.apiUrl, model }), (local?.definitions.length ?? 0) + (options.subagents ? 1 : 0));
           tools = local ? composeToolSessions(local, mounted) : mounted;
         } catch (error) {
           await local?.close().catch(() => {});
@@ -653,6 +657,52 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         if (questionAllowed && !tools.definitions.some((definition) => definition.function.name === ASK_USER_TOOL)) {
           tools.definitions.push(ASK_USER_TOOL_DEFINITION);
         }
+        const mounted = tools;
+        const gate = async (name: string, args: Record<string, unknown>, label?: string) => {
+          mounted.validate(name, args);
+          const shown = mounted.view(name, args);
+          const title = label ? `${label} · ${shown.title}` : shown.title;
+          const summary = preview(shown.input);
+          // This runtime has no provider reviewer, so Full access is honoured here.
+          const full = (turn.approvalModeNow?.() ?? turn.approvalMode) === "full";
+          const floored = approval.floored({ full, threadId: turn.threadId, botId: turn.botId, shown, summary });
+          const allowed = !floored && (full || !shown.ask || await approval.ask(title, summary ?? "This tool has no arguments.", shown.grant));
+          return { shown, summary, floored, allowed };
+        };
+        const notice = (message: string) => emit({ ...base(turn.threadId, turnId), type: "runtime.notice", message });
+        const delegateOffered = options.subagents !== undefined && options.tools !== false && !turn.guestConfined
+          && allowsTool(scope, { kind: "native", name: DELEGATE_TOOL });
+        const subagentTools = mounted.definitions.filter((definition) => definition.function.name !== ASK_USER_TOOL);
+        if (delegateOffered) mounted.definitions.push(DELEGATE_TOOL_DEFINITION);
+        let delegateItem = "";
+        const subagentsStarted = { count: 0 };
+        const oneAtATime = serialized();
+        const subagentContext: SubagentContext | undefined = options.subagents && {
+          system: messages[0]?.role === "system" && typeof messages[0].content === "string" ? messages[0].content : "",
+          definitions: subagentTools,
+          signal: abort.signal,
+          limits: options.subagents,
+          complete: async (subMessages) => {
+            const completion = await complete(subMessages, model, true, abort.signal, undefined, subagentTools, undefined, turn.effort);
+            if (completion.usage) {
+              usage.input += completion.usage.input;
+              usage.output += completion.usage.output;
+              hasUsage = true;
+            }
+            return completion;
+          },
+          reply: (completion, content) => assistantReply(model, completion, content, completion.toolCalls),
+          call: async (name, args, label) => {
+            const gated = await gate(name, args, label);
+            if (!gated.allowed) return { ok: false, text: refusal(gated.floored, notice) };
+            const run = () => mounted.execute(name, args, abort.signal);
+            const result = options.subagents!.concurrentTools.has(name) ? await run() : await oneAtATime(run);
+            return { ok: result.ok, text: safeText(result.text) + (result.images?.length ? "\n[Screenshot not shown to subagents.]" : "") };
+          },
+          progress: (line) => {
+            if (delegateItem) emit({ ...base(turn.threadId, turnId), type: "item.output", itemType: "tool", itemId: delegateItem, text: `${safeText(line)}\n` });
+          },
+        };
         for (let round = 0; round < MAX_CHAT_ROUNDS; round++) {
           abort.signal.throwIfAborted();
             // Between rounds, never inside a tool batch.
@@ -851,17 +901,20 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
                     result = { ok: true, text: answer };
                   }
                 }
+              } else if (call.function.name === DELEGATE_TOOL && delegateOffered && subagentContext) {
+                title = "Subagents";
+                emit({ ...base(turn.threadId, turnId), type: "item.started", itemType: "tool", itemId: call.id, title, ...(inputPreview ? { input: inputPreview } : {}) });
+                started = true;
+                const tasks = subagentTasks(args as Record<string, unknown>);
+                delegateItem = call.id;
+                result = tasks ? await runSubagents(tasks, subagentContext, subagentsStarted)
+                  : { ok: false, text: "The delegate arguments are malformed: pass tasks, an array of one to four objects that each have a title and a prompt." };
+                delegateItem = "";
               } else {
                 const refused = repeats?.refuses(call.function.name, call.function.arguments);
                 if (refused) { skipRepeatCount = true; throw new Error(refused); }
-                tools.validate(call.function.name, args);
-                const shown = tools.view(call.function.name, args as Record<string, unknown>); title = shown.title;
-                const shownPreview = shown.input === args ? inputPreview : preview(shown.input);
-                // This runtime has no provider reviewer, so Full access is honoured here.
-                const full = (turn.approvalModeNow?.() ?? turn.approvalMode) === "full";
-                const floored = approval.floored({ full, threadId: turn.threadId, botId: turn.botId, shown, summary: shownPreview });
-                const allowed = !floored && (full || !shown.ask
-                  || await approval.ask(shown.title, shownPreview ?? "This tool has no arguments.", shown.grant));
+                const { shown, summary: shownPreview, floored, allowed } = await gate(call.function.name, args as Record<string, unknown>);
+                title = shown.title;
                 abort.signal.throwIfAborted();
                 emit({ ...base(turn.threadId, turnId), type: "item.started", itemType: "tool", itemId: call.id,
                   title: shown.title, ...(shownPreview ? { input: shownPreview } : {}),
@@ -887,7 +940,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
                 } else {
                   personRefused = true;
                   denials.push(shown.title);
-                  result = { ok: false, text: refusal(floored, (message) => emit({ ...base(turn.threadId, turnId), type: "runtime.notice", message })) };
+                  result = { ok: false, text: refusal(floored, notice) };
                 }
               }
             } catch (error) {

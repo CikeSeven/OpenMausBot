@@ -45,6 +45,7 @@ Use only mapped, tested commands:
 
 - [The headless command line](headless-cli.md)
 - [Chat turns](chat-turns.md)
+- [Built-in agent: connections, workspace tools, subagents](built-in-agent.md)
 - [Conversation context compaction](context-compaction.md)
 - [Work summaries and engine hooks](digests.md)
 - [OpenAI-compatible structured tools](openai-tools.md)

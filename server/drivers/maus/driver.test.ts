@@ -54,7 +54,7 @@ describe("the built-in agent on the Responses API", () => {
       : responsesReply.text("Done."));
     const running = f.turn({ approvalMode: "ask" });
     const opened = await f.answerNextRequest("allow");
-    expect(opened).toMatchObject({ requestType: "permission", tool: "Write file", allowSession: true });
+    expect(opened).toMatchObject({ requestType: "permission", tool: "write_file", allowSession: true });
     expect((await running).end).toMatchObject({ ok: true });
     expect(readFileSync(join(f.folder, "a.txt"), "utf8")).toBe("A");
   });
@@ -73,7 +73,7 @@ describe("the built-in agent on the Responses API", () => {
     const { end } = await running;
     expect(readFileSync(join(f.folder, "inside.txt"), "utf8")).toBe("in");
     expect(() => readFileSync(join(outside, "outside.txt"))).toThrow();
-    expect(end).toMatchObject({ ok: false, denials: ["Write file"] });
+    expect(end).toMatchObject({ ok: false, denials: ["write_file"] });
   });
 
   it("edits a file in place and reads it back numbered", async () => {
@@ -105,9 +105,9 @@ describe("the built-in agent on the Responses API", () => {
       : responsesReply.text("Done."));
     const running = f.turn({ approvalMode: "edits" });
     const opened = await f.answerNextRequest("deny");
-    expect(opened).toMatchObject({ tool: "Run command" });
+    expect(opened).toMatchObject({ tool: "run_command" });
     expect(opened.summary).toContain("touch made-by-command");
-    expect((await running).end).toMatchObject({ denials: ["Run command"] });
+    expect((await running).end).toMatchObject({ denials: ["run_command"] });
   });
 
   it.skipIf(process.platform === "win32")("stops a command at the safety floor even with Full access", async () => {
@@ -117,7 +117,7 @@ describe("the built-in agent on the Responses API", () => {
       : responsesReply.text("I could not do that."));
     const { end } = await f.turn();
     expect(toolOutputs(f.server.calls[1]!)[0]!.result).toContain("safety floor");
-    expect(end).toMatchObject({ denials: ["Run command"] });
+    expect(end).toMatchObject({ denials: ["run_command"] });
   });
 
   it("offers no command tool in a guest turn, and refuses a read outside its folder", async () => {

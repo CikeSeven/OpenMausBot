@@ -26,19 +26,16 @@ export const WORKSPACE_TOOL_NAMES = ["read_file", "write_file", "edit_file", "li
 type ToolName = (typeof WORKSPACE_TOOL_NAMES)[number];
 
 const PATH = { type: "string", description: "A path relative to the working folder, or an absolute path." };
-const DEFINITIONS: Record<ToolName, { title: string; description: string; parameters: Record<string, unknown> }> = {
+const DEFINITIONS: Record<ToolName, { description: string; parameters: Record<string, unknown> }> = {
   read_file: {
-    title: "Read file",
     description: `Read a text file. Lines come back numbered. At most ${READ_LINES} lines per call: pass offset (1-based line) and limit to read further.`,
     parameters: { type: "object", properties: { path: PATH, offset: { type: "integer", minimum: 1 }, limit: { type: "integer", minimum: 1, maximum: READ_LINES } }, required: ["path"], additionalProperties: false },
   },
   write_file: {
-    title: "Write file",
     description: "Create a file or replace its whole content. Missing parent folders are created. Prefer edit_file to change part of an existing file.",
     parameters: { type: "object", properties: { path: PATH, content: { type: "string" } }, required: ["path", "content"], additionalProperties: false },
   },
   edit_file: {
-    title: "Edit file",
     description: "Replace exact text in a file. old_string must match the file byte for byte, including indentation, and appear exactly once unless replace_all is true. Read the file first.",
     parameters: {
       type: "object",
@@ -47,12 +44,10 @@ const DEFINITIONS: Record<ToolName, { title: string; description: string; parame
     },
   },
   list_files: {
-    title: "List files",
     description: `List files matching a glob pattern such as "**/*.ts" (default "**/*"), skipping .git and node_modules. At most ${LISTED_FILES} paths.`,
     parameters: { type: "object", properties: { pattern: { type: "string" }, path: { ...PATH, description: "The folder to search from; defaults to the working folder." } }, additionalProperties: false },
   },
   search: {
-    title: "Search",
     description: `Search file contents with a regular expression. Returns matching lines as path:line:text, at most ${SEARCH_LINES}.`,
     parameters: {
       type: "object",
@@ -66,7 +61,6 @@ const DEFINITIONS: Record<ToolName, { title: string; description: string; parame
     },
   },
   run_command: {
-    title: "Run command",
     description: `Run a shell command in the working folder and return its output and exit code. Default timeout ${DEFAULT_COMMAND_MS / 1000} s, at most ${LONGEST_COMMAND_MS / 1000} s. Nothing is interactive: never start a command that waits for input.`,
     parameters: {
       type: "object",
@@ -265,7 +259,7 @@ export function workspaceTools(turn: SendTurnInput): ChatToolSession | undefined
   };
 
   const view = (name: string, args: Record<string, unknown>): ChatToolCallView => {
-    const title = isToolName(name) ? DEFINITIONS[name].title : name;
+    const title = name;
     const level = mode();
     switch (name) {
       case "read_file":

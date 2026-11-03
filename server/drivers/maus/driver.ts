@@ -9,7 +9,7 @@ import { anthropicWire } from "../wires/anthropic.ts";
 import { geminiWire } from "../wires/gemini.ts";
 import { responsesWire } from "../wires/responses.ts";
 import { mausBasePrompt } from "./prompt.ts";
-import { workspaceTools } from "./workspace-tools.ts";
+import { WORKSPACE_TOOL_NAMES, workspaceTools } from "./workspace-tools.ts";
 
 const DRIVER_KIND = "mausAgent" satisfies typeof MAUS_AGENT_DRIVER;
 
@@ -72,6 +72,7 @@ function seededCatalog(config: MausAgentConfig): ModelCatalog {
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 180_000;
+const SUBAGENT_LIMITS = { perTurn: 8, concurrent: 4, rounds: 40 };
 
 export const MausAgentDriver: ProviderDriver<MausAgentConfig> = {
   driverKind: DRIVER_KIND,
@@ -121,7 +122,8 @@ export const MausAgentDriver: ProviderDriver<MausAgentConfig> = {
       retryScale: 1,
       computerUse: true,
       localTools: (turn) => workspaceTools(turn),
-      basePrompt: (turn) => mausBasePrompt(turn),
+      basePrompt: (turn) => mausBasePrompt(turn, { subagents: !turn.guestConfined }),
+      subagents: { ...SUBAGENT_LIMITS, concurrentTools: new Set(WORKSPACE_TOOL_NAMES) },
       readsToolFailures: true,
       billing: "metered",
       includeUsageInCompleted: true,
