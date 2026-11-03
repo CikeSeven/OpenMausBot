@@ -9,6 +9,7 @@ import { bindSafetyFloor } from "../../safety-floor-gate.ts";
 import { removeTempDir } from "../../testing/cleanup.ts";
 import { responsesReply, type FakeModelCall, type FakeReply } from "../../testing/fake-model-server.ts";
 import { mausFixture } from "../../testing/maus-fixture.ts";
+import { assertToolScopeSupported } from "../../../shared/tool-scope-support.ts";
 
 const MODEL = "relay-model";
 const cleanups: Array<() => Promise<void>> = [];
@@ -30,6 +31,14 @@ const toolOutputs = (call: FakeModelCall) => (call.body.input as Array<Record<st
   .filter((item) => item.type === "function_call_output").map((item) => JSON.parse(item.output) as { ok: boolean; result: string });
 
 describe("the built-in agent on the Responses API", () => {
+  it("keeps its native tools when limiting MCP tools and refuses unsupported native restrictions", async () => {
+    const f = await fixture(() => responsesReply.text("Hello."));
+    expect(() => assertToolScopeSupported("mausAgent", { allow: [] })).toThrow(/native tool selection is not supported/);
+    const toolScope = assertToolScopeSupported("mausAgent", { allow: ["native:*"] });
+    expect((await f.turn({ toolScope })).end).toMatchObject({ ok: true });
+    expect((f.server.calls[0]!.body.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual(expect.arrayContaining(["read_file", "write_file", "run_command"]));
+  });
+
   it("writes a file with its own tool, then answers", async () => {
     const f = await fixture((_call, nth) => nth === 1
       ? responsesReply.calls({ id: "c1", name: "write_file", args: { path: "notes/hello.txt", content: "hi there\n" } })

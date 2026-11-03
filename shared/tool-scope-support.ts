@@ -4,7 +4,7 @@ import { narrowsNativeTools, parseToolScope, type ToolScope } from "./tool-scope
 export const TOOL_SCOPE_SUPPORT = {
   grok: "native-and-mcp", grokAgent: "native-and-mcp", piAgent: "native-and-mcp",
   "openai-compat": "native-and-mcp", mistral: "native-and-mcp", minimax: "native-and-mcp", cerebras: "native-and-mcp", groq: "native-and-mcp", greenference: "native-and-mcp", meta: "native-and-mcp",
-  claudeAgent: "mcp", codex: "mcp", geminiAgent: "mcp", kimiAgent: "mcp", droidAgent: "mcp",
+  claudeAgent: "mcp", codex: "mcp", geminiAgent: "mcp", kimiAgent: "mcp", droidAgent: "mcp", mausAgent: "mcp",
   cursorAgent: "mcp", opencodeGo: "mcp", qwenAgent: "mcp", hermesAgent: "mcp", clineAgent: "mcp", copilotAgent: "mcp", deepseekAgent: "mcp", customAcp: "mcp", antigravityAgent: "mcp", museCode: "mcp",
 } as const;
 
