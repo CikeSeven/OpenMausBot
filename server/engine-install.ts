@@ -1,7 +1,7 @@
 // No sudo, no shell, no terminal: the package name comes from the driver's own install descriptor, never a request, and
 // npm runs with a fixed argument list as this process's user into an app-owned prefix.
 import { mkdirSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { EngineInstall, StandaloneRelease } from "./contracts.ts";
 import { DATA_DIR, stripWorkspaceCredentialEnv } from "./config.ts";
@@ -101,9 +101,12 @@ export function installNpmEngine(pkg: string, options: InstallOptions = {}): Pro
 async function installOnce(pkg: string, options: InstallOptions): Promise<void> {
   const prefix = enginesPrefix(options.baseDir);
   mkdirSync(prefix, { recursive: true });
+  const path = options.path ?? augmentedPath();
+  const npm = findCliCandidates("npm", path)[0];
+  if (!npm) throw new Error("npm is not installed on this server. Install Node.js with npm for the user running OpenMausBot, then try again.");
   const env: NodeJS.ProcessEnv = {
     ...(options.env ?? process.env),
-    PATH: options.path ?? augmentedPath(),
+    PATH: "electron" in process.versions ? path : [...new Set([...path.split(delimiter), dirname(process.execPath)])].join(delimiter),
     NO_COLOR: "1",
     npm_config_update_notifier: "false",
     npm_config_fund: "false",
@@ -115,7 +118,7 @@ async function installOnce(pkg: string, options: InstallOptions): Promise<void> 
   // its native binary as a platform optional dependency, which a user-level `omit=optional` must not drop.
   const args = ["install", "-g", "--prefix", prefix, "--loglevel=error", "--include=optional", `--allow-scripts=${pkg}`, `${pkg}@latest`];
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  await runInstall(pkg, args, env, prefix, timeoutMs);
+  await runInstall(pkg, npm, args, env, prefix, timeoutMs);
   const binDir = enginesBinDir(options.baseDir);
   registerPathDir(binDir);
   resetPathCache();
@@ -127,14 +130,14 @@ async function installOnce(pkg: string, options: InstallOptions): Promise<void> 
   // npm exits 0 even after dropping an optional dependency it failed to download, so prove the CLI starts; a second run fetches it.
   let failure = await probeCli(installed, env);
   if (failure === null) return;
-  await runInstall(pkg, args, env, prefix, timeoutMs);
+  await runInstall(pkg, npm, args, env, prefix, timeoutMs);
   failure = await probeCli(installed, env);
   if (failure === null) return;
   throw new Error(`npm installed ${pkg}, but \`${options.cli}\` does not start: ${failure}\nnpm can leave out a platform package when its download fails, even after a retry. Check this server's network connection, then install again from Settings.`);
 }
 
-async function runInstall(pkg: string, args: string[], env: NodeJS.ProcessEnv, prefix: string, timeoutMs: number): Promise<void> {
-  const result = await runNpm(args, env, prefix, timeoutMs);
+async function runInstall(pkg: string, npm: string, args: string[], env: NodeJS.ProcessEnv, prefix: string, timeoutMs: number): Promise<void> {
+  const result = await runNpm(npm, args, env, prefix, timeoutMs);
   if (result.code !== 0) {
     throw new Error(`npm could not install ${pkg} on this server.${tail(result.output)}`);
   }
@@ -159,11 +162,11 @@ function tail(output: string): string {
   return `\n${lines.join("\n").slice(-600)}`;
 }
 
-function runNpm(args: string[], env: NodeJS.ProcessEnv, cwd: string, timeoutMs: number): Promise<{ code: number | null; output: string }> {
+function runNpm(npm: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, timeoutMs: number): Promise<{ code: number | null; output: string }> {
   return new Promise((resolveRun, rejectRun) => {
     let child: ReturnType<typeof spawnCli>;
     try {
-      child = spawnCli("npm", args, { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
+      child = spawnCli(npm, args, { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
     } catch {
       rejectRun(new Error("npm could not start on this server. Install Node.js with npm for the user running OpenMausBot, then try again."));
       return;
