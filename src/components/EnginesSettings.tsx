@@ -17,6 +17,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Select } from "./Select";
 import { SettingsDisclosureRow, SettingsGroup, SettingsRows } from "./SettingsPrimitives";
 import { InstanceProviderMark } from "./ProviderIcons";
+import { MausAgentConnections, isMausConnection } from "./MausAgentConnections";
 
 interface ProbeResult {
   ok: boolean;
@@ -507,7 +508,8 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
   const { state } = useStore();
   // Leaving Settings ends the "now uses the copy OpenMausBot installed" lines.
   useEffect(() => forgetAppCopySwitches, []);
-  const listed = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable" || isApiKeyEngine(i));
+  const listed = state.instances.filter((i) => !isMausConnection(i)
+    && (i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable" || isApiKeyEngine(i)));
   // A provider's accounts share one card, which takes the place of its first account.
   const groups = new Map<AccountGroup, InstanceInfo[]>();
   for (const instance of listed) {
@@ -527,7 +529,7 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
       : <EngineRow instance={instance} bare={bare} />;
   };
 
-  if (simple && more) return <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} />;
+  if (simple && more) return <><SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} /><MausAgentConnections /></>;
 
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-2">
@@ -539,6 +541,7 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
         <RefreshEngines />
       </div>
       <EngineSections instances={rows} isReady={isReady} renderEngine={renderEngine} />
+      <MausAgentConnections />
       <HiddenEngines />
       <CacheKeepWarmSettings />
     </div>

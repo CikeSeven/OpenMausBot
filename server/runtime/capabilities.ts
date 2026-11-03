@@ -13,7 +13,7 @@ export interface EngineCapabilities {
 const CHAT_STEP_CAP = 64;
 
 // transcript: the engine sends the thread as SendTurnInput.transcript messages, so the turn text must not replay it inline too.
-type EngineRow = Pick<EngineCapabilities, "resume" | "stepCap"> & { transcript?: true };
+type EngineRow = Pick<EngineCapabilities, "resume" | "stepCap"> & { transcript?: true; subagents?: true };
 
 const CHAT_ROW: EngineRow = { resume: false, stepCap: CHAT_STEP_CAP, transcript: true };
 
@@ -43,6 +43,7 @@ const ENGINES: Readonly<Record<string, EngineRow>> = {
   groq: CHAT_ROW,
   greenference: CHAT_ROW,
   meta: CHAT_ROW,
+  mausAgent: { ...CHAT_ROW, subagents: true },
 };
 
 export function replaysTranscriptNatively(driverKind: string | undefined): boolean {
@@ -59,6 +60,6 @@ export function engineCapabilities(driverKind: string | undefined): EngineCapabi
     full: supportsApprovalMode(driverKind, "full"),
     edits: supportsApprovalMode(driverKind, "edits"),
     ...(row?.stepCap === undefined ? {} : { stepCap: row.stepCap }),
-    subagents: false,
+    subagents: row?.subagents === true,
   };
 }

@@ -36,6 +36,7 @@ const EXPECTED: Record<string, EngineCapabilities> = {
   groq: chat,
   greenference: chat,
   meta: chat,
+  mausAgent: { ...chat, edits: true, subagents: true },
 };
 
 describe("engineCapabilities", () => {
@@ -61,8 +62,8 @@ describe("engineCapabilities", () => {
     expect(engineCapabilities("__proto__")).toEqual(none);
   });
 
-  it("gives no engine subagents today", () => {
-    for (const kind of ENGINE_KINDS) expect(engineCapabilities(kind).subagents).toBe(false);
+  it("gives subagents only to the built-in agent, which runs them itself", () => {
+    for (const kind of ENGINE_KINDS) expect(engineCapabilities(kind).subagents, kind).toBe(kind === "mausAgent");
   });
 
   it("leaves stepCap off engines that bound their own turns", () => {

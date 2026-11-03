@@ -10,6 +10,7 @@ import {
 import { updateClaudeCli } from "../claude-update.ts";
 import { persistableInstanceConfigs, saveConfig, withInstanceCli, type AppConfig } from "../config.ts";
 import { addEndpoint, addEndpointSchema, isAddedEndpoint, withEndpointUrls } from "../openai-compat-endpoints.ts";
+import { addMausConnection, addMausConnectionSchema, isMausConnection, withMausConnections } from "../maus-connections.ts";
 import type { InstanceConfigMap, ModelSelection, ProviderInstance } from "../contracts.ts";
 import { removeAntigravityProfile } from "../drivers/antigravity-acp.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
@@ -53,7 +54,8 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
     persistProviderInstance, configStatus, broadcast, testCliBinary, cliProbeEnvironment, threadBusy,
     botForThread, activeGroupTurnForBot,
   } = deps;
-  const describeInstances = async () => hostedModels ? deps.describeInstances() : withEndpointUrls(await deps.describeInstances(), cfg.instances ?? {});
+  const describeInstances = async () => hostedModels ? deps.describeInstances()
+    : withMausConnections(withEndpointUrls(await deps.describeInstances(), cfg.instances ?? {}), cfg.instances ?? {});
   /** Bots, their backups and threads, the new-bot default, or a turn running on it: a provider in use can't go away. */
   const providerInUse = (instanceId: string): boolean => cfg.defaultModelSelection?.instanceId === instanceId || store.bots.some((bot) =>
     bot.modelSelection.instanceId === instanceId || bot.fallback?.some(candidate => candidate.instanceId === instanceId) || store.tasks(bot.id).some((task) => task.modelSelection?.instanceId === instanceId)) ||
@@ -152,6 +154,21 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
       try {
         const instances = persistableInstanceConfigs(cfg);
         const added = addEndpoint(instances, parsed.data);
+        if ("error" in added) return json(res, 400, { error: added.error });
+        await persistProviderInstance(added.instanceId, instances);
+        return json(res, 201, { instanceId: added.instanceId, instances: await describeInstances() });
+      } finally { providerConfigBusy.set(false); }
+    }
+
+    if (method === "POST" && path === "/api/instances/maus") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const parsed = addMausConnectionSchema.safeParse(await readBody(req, 8192));
+      if (!parsed.success) return json(res, 400, { error: "Enter a display name (up to 80 characters), an API format, a base URL and an API key." });
+      if (providerConfigBusy.get()) return json(res, 409, { error: "provider settings are already being updated" });
+      providerConfigBusy.set(true);
+      try {
+        const instances = persistableInstanceConfigs(cfg);
+        const added = addMausConnection(instances, parsed.data);
         if ("error" in added) return json(res, 400, { error: added.error });
         await persistProviderInstance(added.instanceId, instances);
         return json(res, 201, { instanceId: added.instanceId, instances: await describeInstances() });
@@ -377,8 +394,8 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
       if (!Object.hasOwn(instances, instanceId)) return json(res, 404, { error: "unknown instance" });
       const addedChatgpt = instances[instanceId].driver === "codex" && instanceId.startsWith("chatgpt-");
       const addedAntigravity = instances[instanceId].driver === "antigravityAgent" && instanceId.startsWith("antigravity-");
-      if (!addedChatgpt && !addedAntigravity && !isAddedEndpoint(instanceId, instances[instanceId]) && (instances[instanceId].driver !== "claudeAgent" || instanceId === "claude")) {
-        return json(res, 400, { error: "Only added Claude, ChatGPT, and Antigravity accounts and OpenAI-compatible endpoints can be removed here." });
+      if (!addedChatgpt && !addedAntigravity && !isAddedEndpoint(instanceId, instances[instanceId]) && !isMausConnection(instanceId, instances[instanceId]) && (instances[instanceId].driver !== "claudeAgent" || instanceId === "claude")) {
+        return json(res, 400, { error: "Only added Claude, ChatGPT, and Antigravity accounts, OpenAI-compatible endpoints and built-in agent connections can be removed here." });
       }
       if (providerInUse(instanceId)) {
         return json(res, 409, { error: "Choose another account for the bots and default model using this account before removing it." });

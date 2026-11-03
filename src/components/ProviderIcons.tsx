@@ -135,8 +135,18 @@ export function GreenferenceMark({ size = 16, className }: IconProps) {
   </svg>;
 }
 
+/** OpenMausBot's own agent: a chat bubble with two eyes. */
+export function MausAgentMark({ size = 16, className }: IconProps) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path fill="none" stroke="var(--color-ink)" strokeWidth={1.8} strokeLinejoin="round" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" />
+    <circle cx="9" cy="10.5" r="1.4" fill="var(--color-ink)" /><circle cx="15" cy="10.5" r="1.4" fill="var(--color-ink)" />
+  </svg>;
+}
+
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
+    case "mausAgent":
+      return <MausAgentMark size={size} className={className} />;
     case "grok":
     case "grokAgent":
       return <GrokMark size={size} className={className} />;

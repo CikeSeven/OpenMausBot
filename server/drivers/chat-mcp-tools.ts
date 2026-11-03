@@ -43,7 +43,8 @@ export interface ChatToolSession {
   validate(name: string, args: unknown): void;
   /** Directory reads and OpenMausBot's own agents server need no card; call_tool shows the tool it runs. */
   view(name: string, args: Record<string, unknown>): ChatToolCallView;
-  execute(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ChatToolResult>;
+  /** `onOutput` receives output the call prints while it runs, for the chat's live status line. */
+  execute(name: string, args: Record<string, unknown>, signal: AbortSignal, onOutput?: (text: string) => void): Promise<ChatToolResult>;
   close(): Promise<void>;
 }
 
@@ -326,8 +327,10 @@ export function directServers(servers: ReadonlyArray<{ name: string; tools: numb
 }
 
 /** Under `schemaProfile` the model reads each tool's schema fitted to its provider; calls are still checked against the full one. */
+/** `reserved`: tools the caller lists beside these, so the MCP servers fit in what is left of the limit. */
 export async function mountChatTools(integrations: SendTurnInput["integrations"], signal: AbortSignal, computerUse = false, toolScope?: ToolScope, callTimeoutMs: number = DEFAULT_CALL_MS,
-  schemaProfile?: ToolSchemaProfile): Promise<ChatToolSession> {
+  schemaProfile?: ToolSchemaProfile, reserved = 0): Promise<ChatToolSession> {
+  const mcpToolCount = MCP_TOOL_COUNT - reserved;
   const parsed = parseToolScope(toolScope);
   if (!parsed.ok) throw new Error(parsed.error);
   const scope = parsed.scope;
@@ -454,10 +457,10 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
       catch (error) { await skip(mount.value.origin.server, error); }
     }
     const wanted = [...offered, ...configured].reduce((sum, server) => sum + server.tools.length, 0);
-    const searchRoom = configured.some((server) => server.tools.length) && wanted > MCP_TOOL_COUNT ? DIRECTORY_TOOL_COUNT : 0;
+    const searchRoom = configured.some((server) => server.tools.length) && wanted > mcpToolCount ? DIRECTORY_TOOL_COUNT : 0;
     // The agents server keeps its whole list first; configured servers fit in what the built-ins leave.
     const shares = shareToolBudget(offered.map(({ origin, tools }, index) => ({ name: String(index), tools: tools.length, agents: origin.agents }))
-      .sort((a, b) => Number(b.agents) - Number(a.agents)), MCP_TOOL_COUNT - searchRoom);
+      .sort((a, b) => Number(b.agents) - Number(a.agents)), mcpToolCount - searchRoom);
     for (const [index, { origin, tools: listed }] of offered.entries()) {
       const tools = capToolList(listed, shares.get(String(index)));
       if (tools.length < listed.length) {
@@ -466,7 +469,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
       }
       register(origin, checkedTools(tools));
     }
-    const direct = directServers(configured.map(({ origin, tools }) => ({ name: origin.server, tools: tools.length })), MCP_TOOL_COUNT - definitions.length);
+    const direct = directServers(configured.map(({ origin, tools }) => ({ name: origin.server, tools: tools.length })), mcpToolCount - definitions.length);
     const searched: typeof configured = [];
     for (const server of configured) {
       if (signal.aborted || closed) throw aborted();
@@ -580,6 +583,28 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
       if (listedAs === DESCRIBE_TOOL) return answer(directory!.describe(args));
       const call = directory!.call(args);
       return "answer" in call ? answer(call.answer) : run(catalog.get(call.name)!, call.arguments, callSignal);
+    },
+  };
+}
+
+/** One session over a turn's in-process tools and its MCP tools. A name the first lists is never routed to the second. */
+export function composeToolSessions(first: ChatToolSession, second: ChatToolSession): ChatToolSession {
+  const own = new Set(first.definitions.map((definition) => definition.function.name));
+  const definitions = [...first.definitions, ...second.definitions.filter((definition) => !own.has(definition.function.name))];
+  const budget: ToolBudget = { ...second.budget, listed: definitions.length };
+  const pick = (name: string) => own.has(name) ? first : second;
+  return {
+    definitions,
+    skipped: [...first.skipped, ...second.skipped],
+    trimmed: [...first.trimmed, ...second.trimmed],
+    budget,
+    validate: (name, args) => pick(name).validate(name, args),
+    view: (name, args) => pick(name).view(name, args),
+    execute: (name, args, signal, onOutput) => pick(name).execute(name, args, signal, onOutput),
+    async close() {
+      const results = await Promise.allSettled([first.close(), second.close()]);
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed) throw failed.reason;
     },
   };
 }

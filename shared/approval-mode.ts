@@ -9,7 +9,7 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 /** Only providers with an implemented permission mapping may expose a level.
  * `edits` (auto-accept edits) exists where the engine has such a mode:
  * Claude and Grok `acceptEdits`, Antigravity `auto_edit`, Qwen `auto-edit`,
- * Gemini `auto_edit`. Codex's Ask already runs `workspace-write`, so an edits
+ * Gemini `auto_edit`, and the built-in agent's own file tools. Codex's Ask already runs `workspace-write`, so an edits
  * level would change nothing there. Full access, the default level, runs on
  * every engine: in the engine's own most permissive mode, or, where it has
  * none, with the harness answering the permission requests it leaves (the
@@ -17,7 +17,7 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
  * confirms). */
 export function supportsApprovalMode(driverKind: string | undefined, mode: ApprovalMode): boolean {
   if (mode === "custom") return driverKind === "codex";
-  if (mode === "edits") return ["claudeAgent", "grokAgent", "antigravityAgent", "qwenAgent", "geminiAgent"].includes(driverKind ?? "");
+  if (mode === "edits") return ["claudeAgent", "grokAgent", "antigravityAgent", "qwenAgent", "geminiAgent", "mausAgent"].includes(driverKind ?? "");
   return true;
 }
 
