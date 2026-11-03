@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,12 +5,10 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { ensureDirs } from "../../config.ts";
-import type { ProviderInstance, RuntimeEvent, SendTurnInput } from "../../contracts.ts";
 import { bindSafetyFloor } from "../../safety-floor-gate.ts";
 import { removeTempDir } from "../../testing/cleanup.ts";
-import { recordEvents, type EventRecorder } from "../../testing/events.ts";
-import { responsesReply, startFakeModelServer, type FakeModelCall, type FakeReply } from "../../testing/fake-model-server.ts";
-import { MausAgentDriver } from "./driver.ts";
+import { responsesReply, type FakeModelCall, type FakeReply } from "../../testing/fake-model-server.ts";
+import { mausFixture } from "../../testing/maus-fixture.ts";
 
 const MODEL = "relay-model";
 const cleanups: Array<() => Promise<void>> = [];
@@ -22,34 +19,11 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function fixture(script: (call: FakeModelCall, nth: number) => FakeReply) {
-  const server = await startFakeModelServer(script, { data: [{ id: MODEL }] });
-  const folder = mkdtempSync(join(tmpdir(), "omb-maus-"));
-  const instance: ProviderInstance = await MausAgentDriver.create({
-    instanceId: `maus-${randomUUID()}`, displayName: "Relay", enabled: true, environment: {},
-    config: MausAgentDriver.decodeConfig({ wire: "openai-responses", url: server.url, key: "fixture-key-81c2" }),
+function fixture(script: (call: FakeModelCall, nth: number) => FakeReply) {
+  return mausFixture({ wire: "openai-responses", model: MODEL, script }).then((made) => {
+    cleanups.push(() => made.close());
+    return made;
   });
-  const recorder: EventRecorder = recordEvents(instance.adapter);
-  cleanups.push(async () => {
-    recorder.stop();
-    await instance.dispose();
-    await server.close();
-    await removeTempDir(folder);
-  });
-  const threadId = randomUUID();
-  const turn = async (input: Partial<SendTurnInput> = {}) => {
-    const seen = recorder.events.length;
-    const { turnId } = await instance.adapter.sendTurn({ threadId, text: "Do the task.", model: MODEL, cwd: folder, approvalMode: "full", ...input });
-    const end = await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
-    return { end, events: recorder.events.slice(seen) };
-  };
-  const answerNextRequest = async (behavior: "allow" | "deny") => {
-    const opened = await recorder.until((event) => event.type === "request.opened" && !recorder.events.some((later) =>
-      later.type === "request.resolved" && later.requestId === (event as { requestId: string }).requestId)) as Extract<RuntimeEvent, { type: "request.opened" }>;
-    await instance.adapter.respondToRequest(threadId, opened.requestId!, { behavior });
-    return opened;
-  };
-  return { server, folder, instance, recorder, turn, answerNextRequest, threadId };
 }
 
 const toolOutputs = (call: FakeModelCall) => (call.body.input as Array<Record<string, any>>)

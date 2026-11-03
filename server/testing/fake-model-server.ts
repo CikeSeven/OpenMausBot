@@ -81,3 +81,55 @@ export const responsesReply = {
     { type: "response.completed", response: { usage: { input_tokens: 10, output_tokens: 5 } } },
   ] }),
 };
+
+/** Anthropic Messages stream frames, each sent with its `event:` name. */
+export const anthropicReply = {
+  text: (text: string, thinking?: string): FakeReply => ({ named: true, sse: [
+    { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } },
+    ...(thinking ? [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking } },
+      { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-1" } },
+      { type: "content_block_stop", index: 0 },
+    ] : []),
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+    { type: "message_stop" },
+  ] }),
+  calls: (thinking: string | undefined, ...calls: Array<{ id: string; name: string; args: unknown }>): FakeReply => ({ named: true, sse: [
+    { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } },
+    ...(thinking ? [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking } },
+      { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-1" } },
+      { type: "content_block_stop", index: 0 },
+    ] : []),
+    ...calls.flatMap((call, position) => {
+      const json = JSON.stringify(call.args);
+      const index = position + 1;
+      return [
+        { type: "content_block_start", index, content_block: { type: "tool_use", id: call.id, name: call.name, input: {} } },
+        { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: json.slice(0, 5) } },
+        { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: json.slice(5) } },
+        { type: "content_block_stop", index },
+      ];
+    }),
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 5 } },
+    { type: "message_stop" },
+  ] }),
+};
+
+/** Gemini streamGenerateContent frames. Calls carry no id, as on Gemini 2.x. */
+export const geminiReply = {
+  text: (text: string): FakeReply => ({ sse: [
+    { candidates: [{ content: { role: "model", parts: [{ text: text.slice(0, 3) }] } }] },
+    { candidates: [{ content: { role: "model", parts: [{ text: text.slice(3) }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 } },
+  ] }),
+  calls: (...calls: Array<{ name: string; args: unknown; signature?: string }>): FakeReply => ({ sse: [
+    { candidates: [{ content: { role: "model", parts: calls.map((call) => ({
+      functionCall: { name: call.name, args: call.args }, ...(call.signature ? { thoughtSignature: call.signature } : {}),
+    })) }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 } },
+  ] }),
+};

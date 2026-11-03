@@ -98,3 +98,19 @@ export async function fetchModelRows(url: string, headers: Record<string, string
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
+
+/** The runtime hands a call's result back as `{ ok, result }`. */
+export function toolResultOf(content: OpenAIChatMessage["content"]): { text: string; failed: boolean } {
+  const text = typeof content === "string" ? content : JSON.stringify(content);
+  try {
+    const parsed = object(JSON.parse(text));
+    if (parsed && typeof parsed.ok === "boolean" && typeof parsed.result === "string") return { text: parsed.result, failed: !parsed.ok };
+  } catch {}
+  return { text, failed: false };
+}
+
+/** A data URL as its media type and base64 payload, or null for a web address. */
+export function inlineImage(url: string): { mediaType: string; data: string } | null {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+  return match ? { mediaType: match[1]!, data: match[2]! } : null;
+}

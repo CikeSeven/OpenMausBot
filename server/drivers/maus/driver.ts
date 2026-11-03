@@ -5,6 +5,8 @@ import { MAUS_AGENT_DRIVER, MAUS_DEFAULT_URLS, MAUS_WIRES, type MausWire } from 
 import { createOpenAIChatRuntime } from "../openai-chat.ts";
 import { onThisNetwork } from "../openai-compat.ts";
 import { chatModelRows, fetchModelRows, type ModelWire } from "../wires/model-wire.ts";
+import { anthropicWire } from "../wires/anthropic.ts";
+import { geminiWire } from "../wires/gemini.ts";
 import { responsesWire } from "../wires/responses.ts";
 import { mausBasePrompt } from "./prompt.ts";
 import { workspaceTools } from "./workspace-tools.ts";
@@ -50,17 +52,17 @@ function decodeConfig(raw: unknown): MausAgentConfig {
 const EFFORT_LEVELS: Readonly<Record<MausWire, readonly EffortLevel[] | undefined>> = {
   "openai-responses": ["low", "medium", "high", "xhigh", "max"],
   "openai-chat": undefined,
-  anthropic: undefined,
-  gemini: undefined,
+  anthropic: ["low", "medium", "high", "xhigh", "max"],
+  gemini: ["none", "low", "medium", "high"],
 };
 
 function wireFor(config: MausAgentConfig, key: string): ModelWire | undefined {
+  const limits = config.maxOutputTokens ? { maxOutputTokens: config.maxOutputTokens } : {};
   switch (config.wire) {
     case "openai-responses": return responsesWire(config.url, key);
     case "openai-chat": return undefined;
-    case "anthropic":
-    case "gemini":
-      throw new Error(`The ${config.wire} API is not available yet.`);
+    case "anthropic": return anthropicWire(config.url, key, limits);
+    case "gemini": return geminiWire(config.url, key, limits);
   }
 }
 
